@@ -1,4 +1,4 @@
-# SaversAppSDK iOS Native Library
+# Savers App iOS Native Library
 
 SaversAppSDK provides a bridge between WKWebView and native features (Maps, Dial Pad, Browser), plus utilities for device ID, session management, location, and URL generation.
 

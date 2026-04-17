@@ -1,9 +1,4 @@
----
-title: Home
-nav_order: 1
----
-
-# YourSDK Documentation
+# Savers App SDK Documentation
 
 SDK that bridges host app features like maps, dialer, browser, device info, session storage, URL generation, navigation, and WebView event handling. It also includes a robust networking layer.
 
@@ -28,9 +23,10 @@ SDK that bridges host app features like maps, dialer, browser, device info, sess
 
 | Platform | Version | Distribution |
 |---|---|---|
-| Android | 1.0.0 | Maven Central |
-| iOS | 1.0.0 | Swift Package Manager |
-| React Native | 1.0.0 | npm |
+| Android | 1.0.1 | Maven Central |
+| iOS | 1.0.2 | Github |
+| React Native | 1.2.7 | npm |
+| Flutter | 1.0.0 | pav.dev |
 
 ---
 
@@ -66,7 +62,7 @@ SDK that bridges host app features like maps, dialer, browser, device info, sess
 ## Changelog
 | Version | Date | Notes |
 |---|---|---|
-| 1.0.0 | Jan 2024 | Initial release |
+| 1.0.0 | Apr 2026 | Initial release |
 
 ---
 

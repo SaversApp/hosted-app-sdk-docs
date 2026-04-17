@@ -1,4 +1,4 @@
-# SaversSDK Android Native Library
+# Savers App Android Native Library
 
 SaversSDK is an Android library that bridges WebView messages to native features such as Maps, Dial Pad, browser navigation, session management, device ID, location, onboarding API, and encrypted URL generation for Savers platform payloads.
 

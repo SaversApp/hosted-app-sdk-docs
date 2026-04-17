@@ -1,4 +1,4 @@
-# Savers React Native SDK
+# Savers App React Native SDK
 
 React Native SDK that bridges host app features like maps, dialer, browser, device info, session storage, URL generation, navigation, and WebView event handling. It also includes a robust networking layer.
 
