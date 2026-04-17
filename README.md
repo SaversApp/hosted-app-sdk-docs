@@ -53,10 +53,10 @@ SDK that bridges host app features like maps, dialer, browser, device info, sess
 
 ## Documentation
 
-- [Android Integration](docs/android)
-- [iOS Integration](docs/ios)
-- [React Native Integration](docs/react-native)
-- [Flutter Integration](docs/flutter)
+- [Android Integration](docs/android.md)
+- [iOS Integration](docs/ios.md)
+- [React Native Integration](docs/react-native.md)
+- [Flutter Integration](docs/flutter.md)
 
 ---
 
