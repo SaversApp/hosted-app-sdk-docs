@@ -33,20 +33,21 @@ SDK that bridges host app features like maps, dialer, browser, device info, sess
 ## Requirements
 
 ### Android
-- Min SDK: 21
+- Min SDK: 24
 - Kotlin: 1.8+
 
 ### iOS
 - iOS 13+
-- Xcode 14+
+- Xcode 15+
 
 ### React Native
-- React Native 0.70+
-- Node.js 16+
+- React Native 0.81.5+
+- React 19.1.0+
+- Node.js 20+
 
 ### Flutter
-- React Native 0.70+
-- Node.js 16+
+- Flutter 1.17.0+
+- Dart SDK 2.8+
 
 ---
 
