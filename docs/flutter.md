@@ -23,7 +23,7 @@ This SDK is published as a public package, but it is only functional for registe
 
 **Procedure to obtain your security credentials:**
 
-1. **Register as a partner** at <https://www.saversapp.com> *(replace with the live partner portal URL before publishing this README)*. Registration includes business verification and a payment step handled by the Savers App business team — self-signup alone does not grant access.
+1. **Register as a partner** at <https://www.saversapp.com>. Registration includes business verification and a payment step handled by the Savers App business team — self-signup alone does not grant access.
 2. Once verification and payment are complete, your organization is issued:
    - **API Key** — identifies your organization to Savers App
    - **Encryption Key** — base64-encoded 256-bit AES key used to encrypt the `qP` payload
