@@ -163,10 +163,10 @@ Nonce is fetched automatically from the stored `userId` + `pRefCode`. Coordinate
 
 Because `initializeUserSession` now establishes the session upfront (see [above](#2-user-session-and-device)), `generateUrl` encrypts the stored `sessionId` as `authSessionId` from the first call — the hosted app no longer needs a prior visit to restore login. `authSessionId` is only omitted if `initializeUserSession` hasn't been called yet, or the SDK hasn't captured a value for it.
 
-`qP` encryption matches React Native `AesCbcCrypto` / hosted web decrypt:
+`qP` encryption matches React Native `AesGcmCrypto` / hosted web decrypt:
 
-- AES-256-CBC
-- inner `hex(iv):base64(content)`
+- AES-256-GCM
+- inner `hex(iv):base64(content):hex(tag)`
 - outer standard base64 (so the page can `atob(qP)`)
 
 ### 4. HostedAppComponent
