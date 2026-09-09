@@ -1,57 +1,102 @@
-# Savers App React Native SDK
+# Savers App SDK (React Native)
 
-React Native SDK that bridges host app features like maps, dialer, browser, device info, session storage, URL generation, navigation, and WebView event handling. It also includes a robust networking layer.
+React Native SDK that acts as the communication layer between your Host App and Savers App — it hosts the Savers merchant web app inside your app via `HostedAppComponent`, pulls member/reward data for display in your own screens, and relays native device actions (maps, dialer, browser) between the hosted web experience and the device.
 
-## Features
-- Open native maps by coordinates with graceful browser fallback
-- Dial pad invocation with optional number and direct call helper
-- External browser navigation from the host app or from web content
-- Close current screen via global `navigationRef` (React Navigation) using **END_SESSION**
-- Device ID retrieval (via `react-native-device-info`)
-- Optional coordinates enrichment for URL payload
-- Session and keys management (API key, encryption key, program ref code, auth mode)
-- URL generator to compose signed and encrypted Savers mobile URLs
-- AES-GCM encryption for URL payload (AES-256-GCM)
-- WebView message handler to trigger native actions from web (maps, dialer, browser, session id, end session)
-- Configurable networking layer with interceptors (logging, network connectivity, auth, retry, error formatting)
+Package name: `@savers_app/react-native-sdk`
+
+## Contents
+
+- [Getting Access — Partner Registration & Credentials](#getting-access--partner-registration--credentials)
+- [Security: Where Credentials Must Live](#security-where-credentials-must-live)
+- [Installation](#installation)
+- [Platform Setup](#platform-setup)
+- [Quick Start](#quick-start)
+- [Information Request Functions](#information-request-functions)
+- [Example App](#example-app)
+- [Notes](#notes)
+
+---
+
+## Getting Access — Partner Registration & Credentials
+
+This SDK is published as a public package, but it is only functional for registered Savers App partners. Access is gated at the credential level, not at the package level — anyone can install `@savers_app/react-native-sdk`, but every API call requires credentials issued through partner registration.
+
+**Procedure to obtain your security credentials:**
+
+1. **Register as a partner** at `<PARTNER_PORTAL_URL>` *(replace with the live partner portal URL before publishing this README)*. Registration includes business verification and a payment step handled by the Savers App business team — self-signup alone does not grant access.
+2. Once verification and payment are complete, your organization is issued:
+   - **API Key** — identifies your organization to Savers App
+   - **Encryption Key** — base64-encoded 256-bit AES key used to encrypt the `qP` payload
+   - **Program Referral Code (`pRefCode`)** — identifies your specific program
+3. Credentials are managed from the partner portal — this is also where you rotate or revoke a compromised key, and where you'll find sandbox vs. production credential pairs.
+4. Do not share credentials outside your organization's backend team. Each partner's credentials are unique to that partner and tied to the agreement signed during registration.
+
+## Security: Where Credentials Must Live
+
+**Your API Key and Encryption Key must be held on your own backend server — never hardcoded in your app's source, and never committed to any repository, public or private.**
+
+The current SDK API (`SaversAppSDK.initialize`) requires your app process to hold these values in memory to call the SDK — that part is unavoidable given how the SDK is built today. What you control, and what matters for security, is *where the values come from*:
+
+- ✅ **Correct:** Your host backend stores the API Key and Encryption Key (in a secrets manager or environment variable, not in code). Your app requests them from your own backend at runtime/login, holds them only in memory, and passes them into `initialize()`. They are never written into your app's source code or build config.
+- ❌ **Incorrect:** The API Key or Encryption Key appears as a literal string constant anywhere in your app's source, `.env` files committed to git, CI config, or build scripts.
+
+Additional practices:
+
+- Treat `authSessionId` the same way you'd treat any session credential — don't log it, and don't pass it through mechanisms that could leak it (e.g. URL query strings that end up in logs or browser history). The SDK persists the underlying `sessionId` via `react-native-keychain` — iOS Keychain / Android Keystore-backed — not plain local storage. It persists until the user logs out (`clearUserSession`).
+- Generated URLs from `generateUrl` are single-use (nonce-based) by design — don't cache or reuse a previously generated URL; call `generateUrl` again for a fresh one.
+- If you suspect a credential has leaked, rotate it immediately from the partner portal rather than waiting for a scheduled rotation.
+- A rotated/revoked/invalid API Key surfaces as a `401` thrown from `initializeUserSession` (it gates the authorize call). A rotated/revoked/invalid Encryption Key, or any other malformed payload issue, surfaces as a `400` thrown from `generateUrl`. Catch both so your app can react to a credential problem (e.g. re-fetch from your backend, alert your team) instead of failing silently or retrying with a dead credential.
 
 ## Installation
-- Install the library:
+
+Install the library and its required peer dependencies:
 
 ```bash
 npm install @savers_app/react-native-sdk
-# or
-yarn add @savers_app/react-native-sdk
-```
-
-- Install required peer dependencies:
-
-```bash
 npm install @react-native-async-storage/async-storage \
+  react-native-keychain \
   @react-native-community/netinfo \
   @react-navigation/native \
   react-native-device-info \
   react-native-aes-gcm-crypto
-# or
+# or with yarn
+yarn add @savers_app/react-native-sdk
 yarn add @react-native-async-storage/async-storage \
+  react-native-keychain \
   @react-native-community/netinfo \
   @react-navigation/native \
   react-native-device-info \
   react-native-aes-gcm-crypto
 ```
 
-- Optional (for WebView-based messaging):
+Both storage packages are required: [`react-native-keychain`](https://www.npmjs.com/package/react-native-keychain) is where the SDK stores the sensitive `sessionId` (Keychain-backed on iOS, encrypted Keystore-backed storage on Android); `@react-native-async-storage/async-storage` is used for the SDK's other, non-sensitive local state. Don't drop either one.
+
+Optional (for WebView-based messaging / `HostedAppComponent`) and for device-location enrichment:
 
 ```bash
-npm install react-native-webview
+npm install react-native-webview @react-native-community/geolocation
 # or
-yarn add react-native-webview
+yarn add react-native-webview @react-native-community/geolocation
 ```
 
-## iOS Setup
-- Add dialer schemes to Info.plist:
+One npm package is published (`@savers_app/react-native-sdk`). Pass `SdkEnvironment` when initializing the SDK to target sandbox (test) or production hosts and API routing — there is no separate sandbox build or package.
+
+## Platform Setup
+
+Android `AndroidManifest.xml`:
 
 ```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+```
+
+iOS `Info.plist`:
+
+```xml
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Location access is used to show nearby offers.</string>
 <key>LSApplicationQueriesSchemes</key>
 <array>
   <string>tel</string>
@@ -59,367 +104,185 @@ yarn add react-native-webview
 </array>
 ```
 
-Ensure native pods are installed and linked for the peer dependencies.
-
-## Android Setup
-- Add permissions in AndroidManifest.xml:
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-```
-
-Link and configure the peer dependencies according to their documentation.
- 
-Requirements for AES-GCM:
-- Android minSdkVersion must be 26 or higher (example app is configured to 26).
-- iOS 13 or higher.
-
 ## Quick Start
 
 ### 1. Initialize the SDK
 
-Before using any other APIs, initialize the SDK with keys you receive from Savers:
+Fetch your credentials from your own backend at runtime (see [Security](#security-where-credentials-must-live) above) before calling `initialize`. Omitted `environment` defaults to production (`https://m.saversapp.com/`).
 
 ```ts
-import { SaversAppSDK } from '@savers_app/react-native-sdk';
+import { SaversAppSDK, SdkEnvironment } from '@savers_app/react-native-sdk';
 
-SaversAppSDK.initialized({
-  apiKey: 'YOUR_API_KEY',
-  encryptionKey: 'BASE64_256_BIT_ENCRYPTION_KEY',
+await SaversAppSDK.initialize({
+  apiKey: apiKeyFromYourBackend,
+  encryptionKey: encryptionKeyFromYourBackend, // base64 of 32 bytes
   pRefCode: 'PROGRAM_REF_CODE',
-  authMode: 'CUSTOMER_SIGN_IN_UP_MODE' // 'EMAIL' | 'PHONE'
+  authMode: 'EMAIL', // 'EMAIL' | 'PHONE'
+  environment: SdkEnvironment.sandbox, // optional: SdkEnvironment.sandbox | SdkEnvironment.prod
 });
 ```
 
-The SDK stores these values in memory (not in AsyncStorage), via an internal `keysManager`. You can later read them using:
+| `environment` | `generateUrl` host |
+|---|---|
+| `SdkEnvironment.sandbox` | `https://testm.saversapp.com/` |
+| `SdkEnvironment.prod` (or omitted) | `https://m.saversapp.com/` |
+
+`initialized` remains as a deprecated alias of `initialize`.
+
+### 2. User session and device
+
+Call after host login. Behind the scenes, `initializeUserSession` now calls a backend authorization endpoint on your behalf — secured with the API key and HMAC-SHA256 payload signing you already supplied to `initialize()` — to establish the session and store the `sessionId` it returns; `generateUrl` and the Information Request Functions use that stored `sessionId` afterward. You still only call `initializeUserSession` itself — there's no separate authorize step for you to trigger from the SDK.
+
+Every call to `initializeUserSession` sends the current profile to the backend, along with the `sessionId` already in storage if one exists (for example, after an app restart). When that `sessionId` is present and still valid, the backend updates the profile on the existing session and returns the same `sessionId` with a fresh access token — this is what makes repeat calls idempotent on the session itself, not just on the profile. If the `sessionId` is missing, expired, or revoked, the backend creates a new session and returns a new `sessionId` and access token instead. Either way, the profile update always takes effect.
+
+If the API Key is rejected (rotated, revoked, or otherwise invalid), `initializeUserSession` throws a `401` — catch this so your app can handle it (e.g. re-fetch credentials from your backend) rather than proceeding with a broken session.
+
+`registerDevice` requires a `deviceId`; `location` is optional. Call it again on each visit/session, not just once after login — refreshing the location on every visit keeps it current for features that depend on the device's location (e.g. nearby offers), rather than relying on a stale coordinate from a previous session.
 
 ```ts
-import {
-  getApiKey,
-  getEncryptionKey,
-  getPRefCode,
-  getAuthMode,
-} from '@savers_app/react-native-sdk';
-```
-
-### 2. Generate URL
-
-```ts
-import { generateUrl } from '@savers_app/react-native-sdk';
-
-const url = await generateUrl({
-  // Top-level UrlInput fields
-  authType: 'PHONE', // optional, defaults to 'PHONE' | also 'EMAIL' | 'USERNAME'
-  profile: {
-    // Mandatory fields
-    userId: 'USER_ID',
-    email: 'jane@example.com',
-    firstname: 'Jane',
-    lastname: 'Doe',
-
-    // Conditionally mandatory
-    phone: '+15555550100', // required when authType === 'PHONE'
-    username: 'jane.doe', // required when authType === 'USERNAME'
-
-    // Optional profile flags
-    pv: '1', // optional: '0' | '1'
-    ev: '1', // optional: '0' | '1'
-
-    // Other optional profile fields
-    dob: '1990-01-01',
-    city: 'San Francisco',
-    zipcode: '94103',
-    referrer_user_id: 'REFERRER_ID',
-  },
-  screen: {
-    // Optional screen; defaults to { name: 'Explore' } when omitted
-    name: 'Explore',
-
-    // attributes are optional in general, but mandatory when name === 'OfrDetails'
-    attributes: [{ key: 'offerId', value: '123' }],
-  },
-  // sessionId is optional; when omitted, the SDK uses its stored session id
-  // deviceInfo is optional; the SDK builds it internally using device id (and optional coordinates)
+await SaversAppSDK.initializeUserSession({
+  userId: 'USER_ID',
+  firstname: 'FIRST_NAME',
+  lastname: 'LAST_NAME',
+  email: 'EMAIL_ADDRESS',
+  phone: 'PHONE_NUMBER', // required when authMode is PHONE
+  city: 'CITY',
+  zipcode: 'ZIP_CODE',
+  dob: 'DATE_OF_BIRTH', // optional
+  pv: '1',
+  ev: '1',
 });
-// returns https://m.saversapp.com/?pRefCode=...&qP=...
+
+await SaversAppSDK.registerDevice({
+  deviceId: await getDeviceId(),
+  location: { lat: latitude, lng: longitude }, // from your own location APIs
+});
+
+// On logout:
+await SaversAppSDK.clearUserSession();
 ```
 
-Profile requirements:
+Profile rules:
+
 - `userId` and `email` are mandatory
-- `pv` and `ev` are optional (`'0'` or `'1'`)
-- `phone` is mandatory when `authType` is `'PHONE'`
-- `username` is mandatory when `authType` is `'USERNAME'`
-Nonce requirement:
-- The SDK resolves a nonce automatically using `profile.userId` and your `pRefCode`; no manual action is required.
+- `phone` is mandatory when `authMode` is `PHONE`
+- `dob` is optional
+- `pv` / `ev` are optional (`'0'` or `'1'`)
+- `referrerUserId` is optional (`referrer_user_id` in the encrypted payload)
 
-Screen requirements:
-- `screen.name` is optional, defaults to `'Explore'`
-- When `screen.name === 'OfrDetails'`, `screen.attributes` **must** be provided and non-empty
+### 3. Generate URL
 
-Location / coordinates:
-- If you use the location manager (see **Location & Coordinates** below) and set coordinates,
-  they are automatically included in the encrypted payload as `deviceInfo.location`.
-- If no coordinates are set, the URL is still generated, and `location` is simply omitted.
+Hosted URLs are single-use (nonce) and expire **60 seconds** after generation — once consumed or expired, the backend rejects the URL. Call `generateUrl` again to mint a fresh URL; user/device come from SDK context.
 
-Notes:
-- The SDK requires `encryptionKey` and `pRefCode` to be initialized via `SaversAppSDK.initialized`; `generateUrl` will throw if either is missing.
-- The `qP` payload is encrypted using AES-256-GCM. The encryption key must be a base64-encoded 32-byte (256-bit) value.
-- The encrypted payload combines `iv`, `content`, and `tag` as `iv:content:tag` internally before being base64-encoded.
+`generateUrl` throws a `400` if the Encryption Key is rejected (rotated, revoked, or otherwise invalid) or the payload otherwise fails validation — catch this the same way you'd catch a `401` from `initializeUserSession`.
 
-## Navigation (End Session)
+```ts
+const url = await SaversAppSDK.generateUrl({ screen: { name: 'Explore' } });
+// https://testm.saversapp.com/?pRefCode=...&qP=...  (sandbox)
+```
 
-The SDK can close the current screen without knowing the host app's navigation structure. This is useful for flows initiated from web content or deep links that need to programmatically exit back to the host app.
+When `screen.name` is `OfrDetails`, `screen.attributes` must be non-empty. Omitting `screen` defaults to `Explore`.
 
-One-time host app setup using a global `navigationRef`:
+Nonce is fetched automatically from the stored `userId` + `pRefCode`. Coordinates from `registerDevice` / `setLocationCoordinates` are included in `deviceInfo.location` when set.
+
+Because `initializeUserSession` now establishes the session upfront (see [above](#2-user-session-and-device)), `generateUrl` encrypts the stored `sessionId` as `authSessionId` from the first call — the hosted app no longer needs a prior visit to restore login. `authSessionId` is only omitted if `initializeUserSession` hasn't been called yet, or the SDK hasn't captured a value for it.
+
+`qP` encryption matches the hosted web decrypt (via `react-native-aes-gcm-crypto` on this SDK's side):
+
+- AES-256-GCM
+- inner `hex(iv):base64(content):hex(tag)`
+- outer standard base64 (so the page can `atob(qP)`)
+
+### 4. HostedAppComponent
+
+Pass the generated URL into `HostedAppComponent`. To refresh a consumed URL, call `generateUrl` again and pass the new string.
 
 ```tsx
-import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
-import { SaversAppSDK } from '@savers_app/react-native-sdk';
+import { HostedAppComponent } from '@savers_app/react-native-sdk';
 
-export const navigationRef = createNavigationContainerRef();
-
-export function App() {
-  // Initialize the SDK once (e.g., in a root effect or before rendering)
-  SaversAppSDK.initialized({
-    apiKey: 'YOUR_API_KEY',
-    encryptionKey: 'BASE64_256_BIT_ENCRYPTION_KEY',
-    pRefCode: 'PROGRAM_REF_CODE',
-    authMode: 'EMAIL', // or 'PHONE'
-    navigationRef,     // pass the ref to the SDK
-  });
-
-  return <NavigationContainer ref={navigationRef}>{/* your navigators */}</NavigationContainer>;
-}
-```
-
-SDK API:
-
-```ts
-import { closeCurrentScreen, closeCurrentScreenSafe } from '@savers_app/react-native-sdk';
-
-closeCurrentScreen(); // returns boolean
-closeCurrentScreenSafe(); // Android-only fallback to exitApp if it can't goBack()
-```
-
-Notes:
-- The same `navigationRef` is passed to the `NavigationContainer` and to `SaversAppSDK.initialized`.
-- The SDK stores this ref internally to implement `closeCurrentScreen()` reliably.
-
-## WebView Integration
-
-Trigger native actions from web & bind `onMessage` to a `WebView`:
-
-```ts
-import { handleWebMessage } from '@savers_app/react-native-sdk';
-import { WebView } from 'react-native-webview';
-...
-
-const onMessage = (e: any) => {
-  const raw = e?.nativeEvent?.data;
-  const postBack = (data: any) => {
-    // send data back to the webview as needed
-  };
-  handleWebMessage(raw, postBack);
-};
-
-<WebView
-  originWhitelist={['*']}
-  source={{ html }}
-  onMessage={onMessage}
+<HostedAppComponent
+  saversAppUrl={generatedUrl}
+  onSaversSdkMessage={(raw, postBack) => {
+    // Required by HostedAppComponent. The SDK handles action dispatch
+    // internally (including ending the session), so no logic is needed
+    // here for a standard integration.
+  }}
 />;
 ```
 
+`HostedAppComponent` maintains two WebViews (via `react-native-webview`) — at any point in time only one is active/visible, the other stays hidden (not destroyed).
 
+Flow:
 
-Supported actions:
-- `OPEN_MAP` `{ lat, lng, label }`
-- `END_SESSION`
-- `SHOW_DIAL_PAD` `{ number? }`
-- `MERCHANT_PORTAL_REDIRECT` `{ url }`
-- `SESSION_ID` `{ sessionId }`
+1. Load: WebView 1 opens `saversAppUrl`. Header and WebView 2 stay hidden.
+2. Hub → **Travel** tile: hosted app posts an envelope with the travel URL.
+3. SDK processes `open_travel`, hides WebView 1, shows header + WebView 2 with that URL.
+4. Header **Back** (native, no close Post Message required): hide WebView 2, show WebView 1 (still loaded), inject Hub navigation `{ type: 'NAVIGATE', route: 'Hub' }` via the global `navigationRef` (React Navigation).
 
-Note: unified WebView helpers were removed. Use `handleWebMessage` directly with `react-native-webview`.
+Travel Post Message (from Hub):
 
-### Web Messaging (for Web Developers)
-
-Your web page loaded in react-native-webview can trigger native features by posting a JSON message. Use:
-
-```html
-<script>
-  function sendNative(action, payload) {
-    const msg = JSON.stringify({ action, payload });
-    window.ReactNativeWebView?.postMessage(msg);
-  }
-
-  // Examples:
-  // Open map
-  sendNative('OPEN_MAP', { lat: 37.7749, lng: -122.4194, label: 'San Francisco' });
-
-  // Dial pad
-  sendNative('SHOW_DIAL_PAD', { number: '+1234567890' });
-
-  // Open external browser
-  sendNative('MERCHANT_PORTAL_REDIRECT', { url: 'https://www.example.com' });
-
-  // Set session ID
-  sendNative('SESSION_ID', { sessionId: '123456789' });
-
-  // End session / close current screen (goBack if possible)
-  sendNative('END_SESSION');
-
-  // Receive postBack from native (optional)
-  document.addEventListener('message', function (e) {
-    try {
-      const data = JSON.parse(e.data);
-      console.log('Native postBack:', data);
-      // { ok: boolean, action: string, ...additional fields }
-    } catch (_) {}
-  });
-</script>
+```json
+{
+  "target": "SDK",
+  "from": "savers",
+  "action": "open_travel",
+  "payload": { "url": "<TRAVEL_PORTAL_URL>" }
+}
 ```
 
-Message schema:
-- `action`: one of `OPEN_MAP`, `END_SESSION`, `SHOW_DIAL_PAD`, `MERCHANT_PORTAL_REDIRECT`, `SESSION_ID`
-- `payload`: object with action-specific fields:
-  - `OPEN_MAP`: `{ lat: number, lng: number, label?: string }`
-  - `SHOW_DIAL_PAD`: `{ number?: string }`
-  - `MERCHANT_PORTAL_REDIRECT`: `{ url: string }`
-  - `SESSION_ID`: `{ sessionId: string }`
-  - `END_SESSION`: no payload required
+Optional: `prepare_travel` (show header early), `close_travel` (same as native Back), `relay` between surfaces. Payload may include branding (`logo`, `backIconColor`, `loaderColor`).
 
-## Device & Session Management
+`HostedAppController.closeSession()` asks the Savers WebView to run Cognito `closeSession`.
 
-The SDK provides helpers for device id, session id, and keys:
+## Session & Login
 
-```ts
-import {
-  getDeviceId,
-  setSessionId,
-  getSessionId,
-  getApiKey,
-  getEncryptionKey,
-  getPRefCode,
-  getAuthMode,
-} from '@savers_app/react-native-sdk';
-```
+`initializeUserSession` calls a backend authorization endpoint internally, using the API key and encryption key you already passed to `initialize()`, together with the current profile and the `sessionId` already in storage if one exists. The endpoint is gated by a mandatory `x-api-key` plus payload signing, so only requests carrying valid partner credentials are accepted. The SDK persists only the `sessionId` it gets back — via `react-native-keychain` (see [Security](#security-where-credentials-must-live) above; Keychain/Keystore-backed) — and holds the access token **in the SDK's in-memory context only — never written to local storage or disk.** The SDK never holds a refresh token at all. The backend is the source of truth on both token and session validity: the SDK does not track expiry itself. When it needs an access token and doesn't have a valid one in memory, it asks the backend for one using the stored `sessionId`:
 
-- `getDeviceId()`: uses `react-native-device-info` to resolve a unique device id and caches it in memory and AsyncStorage.
-- `setSessionId(sessionId)` / `getSessionId()`: store and retrieve a session identifier using AsyncStorage.
-- `getApiKey()`, `getEncryptionKey()`, `getPRefCode()`, `getAuthMode()`: read values initialized via `SaversAppSDK.initialized`.
+- If the session is still valid, the backend issues a new access token (the refresh token, if the backend keeps one, stays unchanged server-side — the SDK never sees or manages it).
+- If the session itself is gone (expired/revoked), the backend returns `401` and the SDK silently re-runs the authorize flow using the profile it already holds in memory from the last `initializeUserSession` call — no action or re-login prompt is required from the host app. This mid-session recovery only covers the app's current run, since it relies on the profile still being in memory. A real app restart is covered a different way: the host app calls `initializeUserSession` again on login/startup per the [Quick Start](#2-user-session-and-device) flow, which now also sends the `sessionId` already in storage — so a restart typically reuses the existing session (with the profile refreshed) rather than creating a new one, and only falls back to a brand-new session if that stored `sessionId` turns out to be invalid. (Recommended, not yet confirmed as implemented: the silent mid-session retry should be capped rather than unbounded, so a backend that keeps rejecting doesn't loop indefinitely.)
 
-## Location & Coordinates
+This means the only client-side credential that survives an app restart is the opaque, revocable `sessionId` — not a bearer token. Information Request Function calls authenticate with the in-memory access token via a `Bearer` header rather than a client-supplied `userId` (see [Information Request Functions](#information-request-functions) below) — this also closes off a client from being able to request another user's data just by passing a different `userId`.
 
-Manual coordinates for URL generation:
+The `sessionId` itself is just an opaque reference your backend resolves — if it's missing, stale, or revoked, the web portal re-authenticates the user automatically and a new `sessionId` is issued. Treat `authSessionId` / `sessionId` as sensitive like any other session credential — don't log it or pass it through anything that could leak it (e.g. URL query strings). Holding the access token only in memory limits its exposure to disk-based extraction — it doesn't defend against a fully compromised device reading process memory directly, but that's a much higher bar than reading local storage. The `sessionId` gets the same disk-level protection, since it's held in `react-native-keychain` rather than plain storage.
 
-   ```ts
-   import { setLocationCoordinates, getLocationCoordinates } from '@savers_app/react-native-sdk';
+Re-calling the authorize endpoint with a `sessionId` that's still valid updates the profile on that existing session and returns the same `sessionId` rather than minting a new one — a new `sessionId` only appears once the previous session is no longer valid (or none was supplied yet).
 
-   await setLocationCoordinates(37.7749, -122.4194);
-   const coords = await getLocationCoordinates(); // { lat, lng } | null
-   ```
+The access token is valid for **30 minutes**. The SDK doesn't need to track this itself (see the reactive, backend-authoritative refresh above) — it's noted here for context on how often an active session triggers a token refresh in the background.
 
-   If coordinates are available, `generateUrl` automatically includes them in the encrypted payload as `deviceInfo.location`. If not, the URL is still generated without `location`.
+The Information Request Functions use the in-memory access token to authenticate on the SDK's behalf; those requests are protected with HMAC-SHA256 payload signing to prevent tampering in transit. Note this is a different property than app-instance attestation (Play Integrity / App Attest) — payload signing verifies a request wasn't altered, not that it came from a genuine, unmodified copy of the app. Attestation is not currently implemented.
 
-## Maps, Dialer & Browser Helpers
+## Information Request Functions
 
-```ts
-import {
-  openMap,
-  openDialPad,
-  callPhone,
-  openBrowser,
-} from '@savers_app/react-native-sdk';
-```
+| Function | Purpose | Response shape |
+|---|---|---|
+| `getTotalEarnings()` | Fetch member earnings to date | `{ totalEarnings: <float>, totalPayouts: <float> }` |
+| `getTransactions()` | Fetch member's latest reward transactions (30 days) | `{ txnId, purchaseAmount, status, ... }` |
+| `getEarnings()` | Member earnings/payouts by month (90 days) | `{ earnings: [{month, value}], payouts: [{month, value}] }` |
+| `getRecommendations()` | Offer recommendations (10–20 offers) | `[{ offId, brandName, logo, offType, ... }]` |
+| `getFavouriteOffers()` | Fetch member's favorite offers | `[{ offId, brandName, logo, offType, ... }]` |
 
-- `openMap(lat, lng, label?)`: opens the native maps app if available, otherwise falls back to browser (Apple Maps / Google Maps).
-- `openDialPad(number?)`: opens the dial pad; if a number is provided, it pre-fills the dialer.
-- `callPhone(number)`: directly attempts to call the number; validates format and throws errors like `INVALID_PHONE_NUMBER` or `CALL_NOT_SUPPORTED`.
-- `openBrowser(url)`: opens an external browser with the given URL.
+None of these take a `userId` argument — the member is identified by the in-memory access token sent as a `Bearer` header (see [Session & Login](#session--login) above), not by a client-supplied ID. This also means a caller can't request another member's data by passing a different `userId`.
 
-## Networking (ApiService)
+From the React Native app, these SDK functions handle the request on the Host App's behalf — you don't need to call Savers App APIs directly to get this data.
 
-Use the `ApiService` to make network requests with unified error handling, caching, and interceptors.
-
-### ApiService Overview
-
-```ts
-import { ApiService } from '@savers_app/react-native-sdk';
-
-const apiService = new ApiService(); // defaults to production base URL
-```
-
-- `ApiService` uses:
-  - `ApiClient` (wraps `fetch` and applies interceptors)
-  - `ApiRepository` (adds caching strategies)
-  - `ApiEndpoints` (centralized endpoint paths)
-  - `ApiResponse<T>` model for response shape
-
-### Onboarding Example
-
-```ts
-import { ApiService } from '@savers_app/react-native-sdk';
-
-const apiService = new ApiService();
-
-// Example: fetch onboarding data as an async generator
-const fetchOnboarding = async () => {
-  try {
-    const generator = apiService.getOnBoarding();
-    for await (const response of generator) {
-      if (response.status) {
-        console.log('Data:', response.data);
-      } else {
-        console.error('Error:', response.message);
-      }
-    }
-  } catch (error) {
-    console.error('Request failed:', error);
-  }
-};
-```
-
-- Responses use the shape: `ApiResponse<T> = { data?: T | null; status?: boolean; message?: string; fromCache: boolean }`.
-- `CacheStrategy` controls whether data comes from cache, network, or both.
-
-Interceptors:
-- `LoggingInterceptor`: logs requests and responses to the console.
-- `NetworkInterceptor`: uses `@react-native-community/netinfo` to detect no-internet conditions and throws a unified error.
-- `RetryInterceptor`: retries failed requests a configurable number of times.
-- `ErrorInterceptor`: maps errors to user-friendly messages.
-- `AuthInterceptor`: placeholder for attaching auth / user information to requests.
 ## Example App
 
-This repository includes an example React Native app that demonstrates most of the SDK features end‑to‑end:
-
-- SDK initialization (`SaversAppSDK.initialized`)
-- Device id, keys, session id, and coordinates usage
-- URL generation (`generateUrl`) and opening the resulting URL in a browser
-- Navigation and end‑session flow via `navigationRef` and `END_SESSION`
-- WebView actions (`OPEN_MAP`, `SHOW_DIAL_PAD`, `MERCHANT_PORTAL_REDIRECT`, `SESSION_ID`, `END_SESSION`)
-- Networking with `ApiService.getOnBoarding()`
-
-To run the example:
-
 ```bash
-# Install dependencies (root + example workspace)
-npm install
-# or
 yarn install
-
-# Start the Metro bundler for the example app
-yarn workspace @saversapp/react-native-sdk-example start
-
-# Run the example app on a device / simulator (from the repo root)
-yarn run:ios     # uses scripts.run:ios from package.json
-yarn run:android # uses scripts.run:android from package.json
+yarn example:ios:yarn      # or: yarn example:android:yarn
+# npm equivalents: npm run example:ios:npm / npm run example:android:npm
 ```
 
+Demo notes:
 
-## Troubleshooting
-- Ensure peer dependencies are installed and linked (AsyncStorage, NetInfo, DeviceInfo, WebView, React Navigation).
-- If `SaversAppSDK.initialized` logs missing modules, install the indicated packages.
-- If AES‑GCM encryption fails, verify that `encryptionKey` is a base64‑encoded 32‑byte (256‑bit) value and that your Android/iOS versions meet the minimum requirements.
+- Init uses sandbox credentials and `SdkEnvironment.sandbox`, then `initializeUserSession` + `registerDevice`.
+- **Open in Browser** / **Open in WebView** sit on the Generated URL card. WebView opens `HostedAppComponent`.
+- After encryption or init changes, do a full app restart rather than relying on Fast Refresh — native/session state can get out of sync with a hot reload.
 
-## License
-MIT
+## Notes
+
+- Location permissions are required on Android and iOS for coordinate enrichment.
+- `encryptionKey` must be base64 of exactly 32 bytes (AES-256).
+- `pRefCode` and `initializeUserSession` are required before `generateUrl`.
+- The `sessionId` is stored via `react-native-keychain` (Keychain/Keystore-backed). `@react-native-async-storage/async-storage` is a separate, required dependency used for the SDK's other, non-sensitive local state — it does not hold the `sessionId`.
+- This package is public on npm; functionality requires valid partner credentials obtained per [Getting Access](#getting-access--partner-registration--credentials) — installing the package alone does not grant access to any Savers App data.
