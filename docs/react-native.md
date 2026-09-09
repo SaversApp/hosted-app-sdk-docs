@@ -197,11 +197,15 @@ Because `initializeUserSession` now establishes the session upfront (see [above]
 
 Pass the generated URL into `HostedAppComponent`. To refresh a consumed URL, call `generateUrl` again and pass the new string.
 
+`HostedAppComponent` also requires `navigationRef` — the `navigationRef` your host app already created and attached to its own `NavigationContainer`. There's nothing new to set up for navigation: just pass in the ref your app already has. The SDK uses it to drive in-app navigation on your behalf (e.g. returning to your Hub screen on native Back, closing the current screen on `END_SESSION`) without you needing to wire that up yourself.
+
 ```tsx
 import { HostedAppComponent } from '@savers_app/react-native-sdk';
 
+// navigationRef here is the same ref your app already passes to its own
 <HostedAppComponent
   saversAppUrl={generatedUrl}
+  navigationRef={navigationRef}
   onSaversSdkMessage={(raw, postBack) => {
     // Required by HostedAppComponent. The SDK handles action dispatch
     // internally (including ending the session), so no logic is needed
@@ -210,6 +214,8 @@ import { HostedAppComponent } from '@savers_app/react-native-sdk';
 />;
 ```
 
+`navigationRef` must be the same ref instance passed to your app's `NavigationContainer`, and that container must already be mounted before `HostedAppComponent` attempts to navigate on it.
+
 `HostedAppComponent` maintains two WebViews (via `react-native-webview`) — at any point in time only one is active/visible, the other stays hidden (not destroyed).
 
 Flow:
@@ -217,7 +223,7 @@ Flow:
 1. Load: WebView 1 opens `saversAppUrl`. Header and WebView 2 stay hidden.
 2. Hub → **Travel** tile: hosted app posts an envelope with the travel URL.
 3. SDK processes `open_travel`, hides WebView 1, shows header + WebView 2 with that URL.
-4. Header **Back** (native, no close Post Message required): hide WebView 2, show WebView 1 (still loaded), inject Hub navigation `{ type: 'NAVIGATE', route: 'Hub' }` via the global `navigationRef` (React Navigation).
+4. Header **Back** (native, no close Post Message required): hide WebView 2, show WebView 1 (still loaded), inject Hub navigation `{ type: 'NAVIGATE', route: 'Hub' }` via the `navigationRef` you passed to `HostedAppComponent`.
 
 Travel Post Message (from Hub):
 
