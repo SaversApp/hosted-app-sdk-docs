@@ -273,10 +273,20 @@ From the React Native app, these SDK functions handle the request on the Host Ap
 
 ## Example App
 
+To run the example:
+
 ```bash
+# Install dependencies (root + example workspace)
+npm install
+# or
 yarn install
-yarn example:ios:yarn      # or: yarn example:android:yarn
-# npm equivalents: npm run example:ios:npm / npm run example:android:npm
+
+# Start the Metro bundler for the example app
+yarn workspace @saversapp/react-native-sdk-example start
+
+# Run the example app on a device / simulator (from the repo root)
+yarn run:ios     # uses scripts.run:ios from package.json
+yarn run:android # uses scripts.run:android from package.json
 ```
 
 Demo notes:
