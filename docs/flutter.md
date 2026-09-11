@@ -93,7 +93,6 @@ await SaversAppSDK.initialize(
   apiKey: apiKeyFromYourBackend,
   encryptionKey: encryptionKeyFromYourBackend, // base64 of 32 bytes
   pRefCode: 'PROGRAM_REF_CODE',
-  authMode: 'EMAIL', // 'EMAIL' | 'PHONE'
   environment: SaversSdkHostedEnvironment.sandbox | SaversSdkHostedEnvironment.prod, // optional: sandbox | prod
 );
 ```
