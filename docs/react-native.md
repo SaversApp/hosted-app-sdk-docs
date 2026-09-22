@@ -58,7 +58,8 @@ npm install @react-native-async-storage/async-storage \
   @react-native-community/netinfo \
   @react-navigation/native \
   react-native-device-info \
-  react-native-aes-gcm-crypto
+  @noble/ciphers \
+  react-native-get-random-values
 # or with yarn
 yarn add @savers_app/react-native-sdk
 yarn add @react-native-async-storage/async-storage \
@@ -66,7 +67,8 @@ yarn add @react-native-async-storage/async-storage \
   @react-native-community/netinfo \
   @react-navigation/native \
   react-native-device-info \
-  react-native-aes-gcm-crypto
+  @noble/ciphers \
+  react-native-get-random-values
 ```
 
 Both storage packages are required: [`react-native-keychain`](https://www.npmjs.com/package/react-native-keychain) is where the SDK stores the sensitive `sessionId` (Keychain-backed on iOS, encrypted Keystore-backed storage on Android); `@react-native-async-storage/async-storage` is used for the SDK's other, non-sensitive local state. Don't drop either one.
