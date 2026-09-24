@@ -152,7 +152,7 @@ Hosted URLs are single-use (nonce) and expire **60 seconds** after generation â€
 `generateUrl` throws a `400` if the Encryption Key is rejected (rotated, revoked, or otherwise invalid) or the payload otherwise fails validation â€” catch this the same way you'd catch a `401` from `initializeUserSession`.
 
 ```dart
-final url = await generateUrl(screen: const Screen(name: 'Explore'));
+final url = await SaversAppSDK.generateUrl(Screen(name: 'Explore'));
 // https://testm.saversapp.com/?pRefCode=...&qP=...  (sandbox)
 ```
 
