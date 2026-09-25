@@ -204,7 +204,7 @@ Use `screen` to land the user on a specific Savers App screen. If no routing att
 | `NOTIF` | Notifications tab of the Inbox page. | NA | `{ name: 'NOTIF' }` |
 | `REC` | Recommendations tab of the Inbox page. | NA | `{ name: 'REC' }` |
 
-> **Testing `OFFERS` and `OFR_DETAILS`:** to test these screens, contact the Savers App team at `<SUPPORT_CONTACT>` *(replace with the live contact before publishing this README)* to get the list of valid category names and test offer IDs.
+> **Testing `OFFERS` and `OFR_DETAILS`:** to test these screens, contact the Savers App team *(replace with the live contact before publishing this README)* to get the list of valid category names and test offer IDs.
 
 Nonce is fetched automatically from the stored `userId` + `pRefCode`. Coordinates from `registerDevice` / `setLocationCoordinates` are included in `deviceInfo.location` when set.
 
