@@ -178,11 +178,33 @@ Hosted URLs are single-use (nonce) and expire **60 seconds** after generation â€
 `generateUrl` throws a `400` if the Encryption Key is rejected (rotated, revoked, or otherwise invalid) or the payload otherwise fails validation â€” catch this the same way you'd catch a `401` from `initializeUserSession`.
 
 ```ts
-const url = await SaversAppSDK.generateUrl({ screen: { name: 'Explore' } });
+const url = await SaversAppSDK.generateUrl({ screen: { name: 'EXPLORE' } });
 // https://testm.saversapp.com/?pRefCode=...&qP=...  (sandbox)
 ```
 
-When `screen.name` is `OfrDetails`, `screen.attributes` must be non-empty. Omitting `screen` defaults to `Explore`.
+#### Entry Screen Options (`screen.name`)
+
+Use `screen` to land the user on a specific Savers App screen. If no routing attribute is provided, the user is directed to the `EXPLORE` page.
+
+| Name | Screen | Screen Attributes | Sample `screen` Param |
+|---|---|---|---|
+| `EXPLORE` | Offers exploration and categories page. The default screen if no routing attribute is provided. | NA | `{ name: 'EXPLORE' }` |
+| `OFFERS` | Offers page for the given category. | `[{ key: 'category', value: 'xxxx' }]` (required) | `{ name: 'OFFERS', attributes: [{ key: 'category', value: 'xxxx' }] }` |
+| `OFR_DETAILS` | Takes user to a specific offer's details page. | `[{ key: 'ofrId', value: 'xxxxx12345' }]` (required) | `{ name: 'OFR_DETAILS', attributes: [{ key: 'ofrId', value: 'xxxxx12345' }] }` |
+| `TRAVEL` | Dedicated members-only travel booking portal. | NA | `{ name: 'TRAVEL' }` |
+| `CARD_ENROLL` | Card Enrollment page. | NA | `{ name: 'CARD_ENROLL' }` |
+| `CARD_LIST` | List of enrolled cards. | NA | `{ name: 'CARD_LIST' }` |
+| `CASHBACK` | Cashback page showing transactions, including their statuses and payouts. | NA | `{ name: 'CASHBACK' }` |
+| `PAYOUT` | Payouts tab of the Cashback page, which shows user's list of payouts to date. | NA | `{ name: 'PAYOUT' }` |
+| `TRX` | Transactions tab of the Cashback page, which shows user's transactions to date. | NA | `{ name: 'TRX' }` |
+| `CONTACT` | Support page where user can submit a ticket. | NA | `{ name: 'CONTACT' }` |
+| `PROFILE` | User profile details page. | NA | `{ name: 'PROFILE' }` |
+| `FAV` | User's favorite offers page. | NA | `{ name: 'FAV' }` |
+| `INBOX` | User Inbox, which contains various notifications and recommendations. | NA | `{ name: 'INBOX' }` |
+| `NOTIF` | Notifications tab of the Inbox page. | NA | `{ name: 'NOTIF' }` |
+| `REC` | Recommendations tab of the Inbox page. | NA | `{ name: 'REC' }` |
+
+> **Testing `OFFERS` and `OFR_DETAILS`:** to test these screens, contact the Savers App team at `<SUPPORT_CONTACT>` *(replace with the live contact before publishing this README)* to get the list of valid category names and test offer IDs.
 
 Nonce is fetched automatically from the stored `userId` + `pRefCode`. Coordinates from `registerDevice` / `setLocationCoordinates` are included in `deviceInfo.location` when set.
 
