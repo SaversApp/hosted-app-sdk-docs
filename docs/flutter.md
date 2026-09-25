@@ -152,11 +152,33 @@ Hosted URLs are single-use (nonce) and expire **60 seconds** after generation â€
 `generateUrl` throws a `400` if the Encryption Key is rejected (rotated, revoked, or otherwise invalid) or the payload otherwise fails validation â€” catch this the same way you'd catch a `401` from `initializeUserSession`.
 
 ```dart
-final url = await SaversAppSDK.generateUrl(Screen(name: 'Explore'));
+final url = await SaversAppSDK.generateUrl(Screen(name: 'EXPLORE'));
 // https://testm.saversapp.com/?pRefCode=...&qP=...  (sandbox)
 ```
 
-When `screen.name` is `OfrDetails`, `screen.attributes` must be non-empty. Omitting `screen` defaults to `Explore`.
+#### Entry Screen Options (`Screen.name`)
+
+Pass a `Screen` to `generateUrl` to land the user on a specific Savers App screen. If no routing attribute is provided, the user is directed to the `EXPLORE` page.
+
+| Name | Screen | Screen Attributes | Sample `Screen` Param |
+|---|---|---|---|
+| `EXPLORE` | Offers exploration and categories page. The default screen if no routing attribute is provided. | NA | `Screen(name: 'EXPLORE')` |
+| `OFFERS` | Offers page for the given category. | `[Attribute(key: 'category', value: 'xxxx')]` (required) | `Screen(name: 'OFFERS', attributes: [Attribute(key: 'category', value: 'xxxx')])` |
+| `OFR_DETAILS` | Takes user to a specific offer's details page. | `[Attribute(key: 'ofrId', value: 'xxxxx12345')]` (required) | `Screen(name: 'OFR_DETAILS', attributes: [Attribute(key: 'ofrId', value: 'xxxxx12345')])` |
+| `TRAVEL` | Dedicated members-only travel booking portal. | NA | `Screen(name: 'TRAVEL')` |
+| `CARD_ENROLL` | Card Enrollment page. | NA | `Screen(name: 'CARD_ENROLL')` |
+| `CARD_LIST` | List of enrolled cards. | NA | `Screen(name: 'CARD_LIST')` |
+| `CASHBACK` | Cashback page showing transactions, including their statuses and payouts. | NA | `Screen(name: 'CASHBACK')` |
+| `PAYOUT` | Payouts tab of the Cashback page, which shows user's list of payouts to date. | NA | `Screen(name: 'PAYOUT')` |
+| `TRX` | Transactions tab of the Cashback page, which shows user's transactions to date. | NA | `Screen(name: 'TRX')` |
+| `CONTACT` | Support page where user can submit a ticket. | NA | `Screen(name: 'CONTACT')` |
+| `PROFILE` | User profile details page. | NA | `Screen(name: 'PROFILE')` |
+| `FAV` | User's favorite offers page. | NA | `Screen(name: 'FAV')` |
+| `INBOX` | User Inbox, which contains various notifications and recommendations. | NA | `Screen(name: 'INBOX')` |
+| `NOTIF` | Notifications tab of the Inbox page. | NA | `Screen(name: 'NOTIF')` |
+| `REC` | Recommendations tab of the Inbox page. | NA | `Screen(name: 'REC')` |
+
+> **Testing `OFFERS` and `OFR_DETAILS`:** to test these screens, contact the Savers App team *(replace with the live contact before publishing this README)* to get the list of valid category names and test offer IDs.
 
 Nonce is fetched automatically from the stored `userId` + `pRefCode`. Coordinates from `registerDevice` / `setLocationCoordinates` are included in `deviceInfo.location` when set.
 
