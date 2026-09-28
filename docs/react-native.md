@@ -287,7 +287,7 @@ The Information Request Functions use the in-memory access token to authenticate
 | `getTotalEarnings()` | Fetch member earnings to date | `{ totalEarned }` — [full shape](#gettotalearnings) |
 | `getTransactions()` | Fetch member's latest reward transactions (30 days) | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [transaction] }` — [full shape](#gettransactions) |
 | `getEarnings()` | Member earnings/payouts by month (90 days) | `[{ year, month, totalEarned }]` — [full shape](#getearnings) |
-| `getRecommendations(limit, offset)` | Offer recommendations (10–20 offers) | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getrecommendations) |
+| `getRecommendations(limit, offset)` | Offer recommendations | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getrecommendations) |
 | `getFavouriteOffers(limit, offset)` | Fetch member's favorite offers | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getfavouriteoffers) |
 
 ### Response Shapes
