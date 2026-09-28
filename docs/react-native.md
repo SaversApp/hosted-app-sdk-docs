@@ -284,11 +284,148 @@ The Information Request Functions use the in-memory access token to authenticate
 
 | Function | Purpose | Response shape |
 |---|---|---|
-| `getTotalEarnings()` | Fetch member earnings to date | `{ totalEarnings: <float>, totalPayouts: <float> }` |
-| `getTransactions()` | Fetch member's latest reward transactions (30 days) | `{ txnId, purchaseAmount, status, ... }` |
-| `getEarnings()` | Member earnings/payouts by month (90 days) | `{ earnings: [{month, value}], payouts: [{month, value}] }` |
-| `getRecommendations()` | Offer recommendations (10–20 offers) | `[{ offId, brandName, logo, offType, ... }]` |
-| `getFavouriteOffers()` | Fetch member's favorite offers | `[{ offId, brandName, logo, offType, ... }]` |
+| `getTotalEarnings()` | Fetch member earnings to date | `{ totalEarned }` — [full shape](#gettotalearnings) |
+| `getTransactions()` | Fetch member's latest reward transactions (30 days) | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [transaction] }` — [full shape](#gettransactions) |
+| `getEarnings()` | Member earnings/payouts by month (90 days) | `[{ year, month, totalEarned }]` — [full shape](#getearnings) |
+| `getRecommendations(limit, offset)` | Offer recommendations (10–20 offers) | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getrecommendations) |
+| `getFavouriteOffers(limit, offset)` | Fetch member's favorite offers | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getfavouriteoffers) |
+
+### Response Shapes
+
+#### getTotalEarnings
+
+`getTotalEarnings()`
+
+```json
+{
+  "totalEarned": <STRING>
+}
+```
+
+#### getTransactions
+
+`getTransactions()`
+
+```json
+{
+  "totalNumberOfPages": <NUMBER>,
+  "totalNumberOfRecords": <NUMBER>,
+  "items": [
+    {
+      "transactionId": <STRING>,
+      "userId": <STRING>,
+      "purchaseAmount": <STRING>,
+      "rewardAmount": <STRING>,
+      "payoutId": <STRING>,
+      "status": <STRING>,
+      "dateTracked": <DATE_STRING>,
+      "dateConfirmed": <DATE_STRING>,
+      "datePaid": <DATE_STRING>,
+      "dateRejected": <DATE_STRING>
+    },
+    …
+  ]
+}
+```
+
+#### getEarnings
+
+`getEarnings()`
+
+```json
+[
+  {
+    "year": <YEAR>,
+    "month": <MONTH>,
+    "totalEarned": <STRING>
+  },
+  …
+]
+```
+
+#### getRecommendations
+
+`getRecommendations(limit: <NUMBER>, offset: <NUMBER>)`
+
+```json
+{
+  "totalNumberOfPages": <NUMBER>,
+  "totalNumberOfRecords": <NUMBER>,
+  "items": [
+    {
+      "offerId": <STRING>,
+      "canonicalBrandId": <STRING>,
+      "brandDba": <STRING>,
+      "brandLogo": <STRING>,
+      "brandLogoSm": <STRING>,
+      "reward": <STRING>,
+      "storeDetails": [
+        {
+          "id": <STRING>,
+          "city": <STRING>,
+          "name": <STRING>,
+          "phone": <STRING>,
+          "state": <STRING>,
+          "address1": <STRING>,
+          "isOnline": <BOOLEAN>,
+          "postCode": <STRING>,
+          "countryCode": <STRING>,
+          "geoLocation": {
+            "latitude": <FLOAT_NUMBER>,
+            "longitude": <FLOAT_NUMBER>
+          },
+          "supportedSchemes": <STRING>[]
+        }
+      ],
+      "title": <STRING>,
+      "redemptionType": <STRING>
+    },
+    …
+  ]
+}
+```
+
+#### getFavouriteOffers
+
+`getFavouriteOffers(limit: <NUMBER>, offset: <NUMBER>)`
+
+```json
+{
+  "totalNumberOfPages": <NUMBER>,
+  "totalNumberOfRecords": <NUMBER>,
+  "items": [
+    {
+      "offerId": <STRING>,
+      "canonicalBrandId": <STRING>,
+      "brandDba": <STRING>,
+      "brandLogo": <STRING>,
+      "brandLogoSm": <STRING>,
+      "reward": <STRING>,
+      "storeDetails": [
+        {
+          "id": <STRING>,
+          "city": <STRING>,
+          "name": <STRING>,
+          "phone": <STRING>,
+          "state": <STRING>,
+          "address1": <STRING>,
+          "isOnline": <BOOLEAN>,
+          "postCode": <STRING>,
+          "countryCode": <STRING>,
+          "geoLocation": {
+            "latitude": <FLOAT_NUMBER>,
+            "longitude": <FLOAT_NUMBER>
+          },
+          "supportedSchemes": <STRING>[]
+        }
+      ],
+      "title": <STRING>,
+      "redemptionType": <STRING>
+    },
+    …
+  ]
+}
+```
 
 None of these take a `userId` argument — the member is identified by the in-memory access token sent as a `Bearer` header (see [Session & Login](#session--login) above), not by a client-supplied ID. This also means a caller can't request another member's data by passing a different `userId`.
 
