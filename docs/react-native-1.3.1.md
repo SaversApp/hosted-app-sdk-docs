@@ -1,0 +1,464 @@
+# Savers App SDK (React Native)
+
+React Native SDK that acts as the communication layer between your Host App and Savers App — it hosts the Savers merchant web app inside your app via `HostedAppComponent`, pulls member/reward data for display in your own screens, and relays native device actions (maps, dialer, browser) between the hosted web experience and the device.
+
+Package name: `@savers_app/react-native-sdk`
+
+## Contents
+
+- [Getting Access — Partner Registration & Credentials](#getting-access--partner-registration--credentials)
+- [Security: Where Credentials Must Live](#security-where-credentials-must-live)
+- [Installation](#installation)
+- [Platform Setup](#platform-setup)
+- [Quick Start](#quick-start)
+- [Information Request Functions](#information-request-functions)
+- [Example App](#example-app)
+- [Notes](#notes)
+
+---
+
+## Getting Access — Partner Registration & Credentials
+
+This SDK is published as a public package, but it is only functional for registered Savers App partners. Access is gated at the credential level, not at the package level — anyone can install `@savers_app/react-native-sdk`, but every API call requires credentials issued through partner registration.
+
+**Procedure to obtain your security credentials:**
+
+1. **Register as a partner** at `<PARTNER_PORTAL_URL>` *(replace with the live partner portal URL before publishing this README)*. Registration includes business verification and a payment step handled by the Savers App business team — self-signup alone does not grant access.
+2. Once verification and payment are complete, your organization is issued:
+   - **API Key** — identifies your organization to Savers App
+   - **Encryption Key** — base64-encoded 256-bit AES key used to encrypt the `qP` payload
+   - **Program Referral Code (`pRefCode`)** — identifies your specific program
+3. Credentials are managed from the partner portal — this is also where you rotate or revoke a compromised key, and where you'll find sandbox vs. production credential pairs.
+4. Do not share credentials outside your organization's backend team. Each partner's credentials are unique to that partner and tied to the agreement signed during registration.
+
+## Security: Where Credentials Must Live
+
+**Your API Key and Encryption Key must be held on your own backend server — never hardcoded in your app's source, and never committed to any repository, public or private.**
+
+The current SDK API (`SaversAppSDK.initialize`) requires your app process to hold these values in memory to call the SDK — that part is unavoidable given how the SDK is built today. What you control, and what matters for security, is *where the values come from*:
+
+- ✅ **Correct:** Your host backend stores the API Key and Encryption Key (in a secrets manager or environment variable, not in code). Your app requests them from your own backend at runtime/login, holds them only in memory, and passes them into `initialize()`. They are never written into your app's source code or build config.
+- ❌ **Incorrect:** The API Key or Encryption Key appears as a literal string constant anywhere in your app's source, `.env` files committed to git, CI config, or build scripts.
+
+Additional practices:
+
+- Treat `authSessionId` the same way you'd treat any session credential — don't log it, and don't pass it through mechanisms that could leak it (e.g. URL query strings that end up in logs or browser history). The SDK persists the underlying `sessionId` via `react-native-keychain` — iOS Keychain / Android Keystore-backed — not plain local storage. It persists until the user logs out (`clearUserSession`).
+- Generated URLs from `generateUrl` are single-use (nonce-based) by design — don't cache or reuse a previously generated URL; call `generateUrl` again for a fresh one.
+- If you suspect a credential has leaked, rotate it immediately from the partner portal rather than waiting for a scheduled rotation.
+- A rotated/revoked/invalid API Key surfaces as a `401` thrown from `initializeUserSession` (it gates the authorize call). A rotated/revoked/invalid Encryption Key, or any other malformed payload issue, surfaces as a `400` thrown from `generateUrl`. Catch both so your app can react to a credential problem (e.g. re-fetch from your backend, alert your team) instead of failing silently or retrying with a dead credential.
+
+## Installation
+
+Install the library and its required peer dependencies:
+
+```bash
+npm install @savers_app/react-native-sdk
+npm install @react-native-async-storage/async-storage \
+  react-native-keychain \
+  @react-native-community/netinfo \
+  @react-navigation/native \
+  react-native-device-info \
+  @noble/ciphers \
+  react-native-get-random-values
+# or with yarn
+yarn add @savers_app/react-native-sdk
+yarn add @react-native-async-storage/async-storage \
+  react-native-keychain \
+  @react-native-community/netinfo \
+  @react-navigation/native \
+  react-native-device-info \
+  @noble/ciphers \
+  react-native-get-random-values
+```
+
+Both storage packages are required: [`react-native-keychain`](https://www.npmjs.com/package/react-native-keychain) is where the SDK stores the sensitive `sessionId` (Keychain-backed on iOS, encrypted Keystore-backed storage on Android); `@react-native-async-storage/async-storage` is used for the SDK's other, non-sensitive local state. Don't drop either one.
+
+Optional (for WebView-based messaging / `HostedAppComponent`) and for device-location enrichment:
+
+```bash
+npm install react-native-webview @react-native-community/geolocation
+# or
+yarn add react-native-webview @react-native-community/geolocation
+```
+
+One npm package is published (`@savers_app/react-native-sdk`). Pass `SdkEnvironment` when initializing the SDK to target sandbox (test) or production hosts and API routing — there is no separate sandbox build or package.
+
+## Platform Setup
+
+Android `AndroidManifest.xml`:
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+```
+
+iOS `Info.plist`:
+
+```xml
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Location access is used to show nearby offers.</string>
+<key>LSApplicationQueriesSchemes</key>
+<array>
+  <string>tel</string>
+  <string>telprompt</string>
+</array>
+```
+
+## Quick Start
+
+### 1. Initialize the SDK
+
+Fetch your credentials from your own backend at runtime (see [Security](#security-where-credentials-must-live) above) before calling `initialize`. Omitted `environment` defaults to production (`https://m.saversapp.com/`).
+
+```ts
+import { SaversAppSDK, SdkEnvironment } from '@savers_app/react-native-sdk';
+
+await SaversAppSDK.initialize({
+  apiKey: apiKeyFromYourBackend,
+  encryptionKey: encryptionKeyFromYourBackend, // base64 of 32 bytes
+  pRefCode: 'PROGRAM_REF_CODE',
+  environment: SdkEnvironment.sandbox, // optional: SdkEnvironment.sandbox | SdkEnvironment.prod
+});
+```
+
+| `environment` | `generateUrl` host |
+|---|---|
+| `SdkEnvironment.sandbox` | `https://testm.saversapp.com/` |
+| `SdkEnvironment.prod` (or omitted) | `https://m.saversapp.com/` |
+
+`initialized` remains as a deprecated alias of `initialize`.
+
+### 2. User session and device
+
+Call after host login. Behind the scenes, `initializeUserSession` now calls a backend authorization endpoint on your behalf — secured with the API key and HMAC-SHA256 payload signing you already supplied to `initialize()` — to establish the session and store the `sessionId` it returns; `generateUrl` and the Information Request Functions use that stored `sessionId` afterward. You still only call `initializeUserSession` itself — there's no separate authorize step for you to trigger from the SDK.
+
+Every call to `initializeUserSession` sends the current profile to the backend, along with the `sessionId` already in storage if one exists (for example, after an app restart). When that `sessionId` is present and still valid, the backend updates the profile on the existing session and returns the same `sessionId` with a fresh access token — this is what makes repeat calls idempotent on the session itself, not just on the profile. If the `sessionId` is missing, expired, or revoked, the backend creates a new session and returns a new `sessionId` and access token instead. Either way, the profile update always takes effect.
+
+If the API Key is rejected (rotated, revoked, or otherwise invalid), `initializeUserSession` throws a `401` — catch this so your app can handle it (e.g. re-fetch credentials from your backend) rather than proceeding with a broken session.
+
+`registerDevice` requires a `deviceId`; `location` is optional. Call it again on each visit/session, not just once after login — refreshing the location on every visit keeps it current for features that depend on the device's location (e.g. nearby offers), rather than relying on a stale coordinate from a previous session.
+
+```ts
+await SaversAppSDK.initializeUserSession({
+  userId: 'USER_ID',
+  firstname: 'FIRST_NAME',
+  lastname: 'LAST_NAME',
+  email: 'EMAIL_ADDRESS',
+  phone: 'PHONE_NUMBER', // required when authMode is PHONE
+  city: 'CITY',
+  zipcode: 'ZIP_CODE',
+  dob: 'DATE_OF_BIRTH', // optional
+  pv: '1',
+  ev: '1',
+});
+
+await SaversAppSDK.registerDevice({
+  deviceId: await getDeviceId(),
+  location: { lat: latitude, lng: longitude }, // from your own location APIs
+});
+
+// On logout:
+await SaversAppSDK.clearUserSession();
+```
+
+Profile rules:
+
+- `userId` and `email` are mandatory
+- `phone` is mandatory when `authMode` is `PHONE`
+- `dob` is optional
+- `pv` / `ev` are optional (`'0'` or `'1'`)
+- `referrerUserId` is optional (`referrer_user_id` in the encrypted payload)
+
+### 3. Generate URL
+
+Hosted URLs are single-use (nonce) and expire **60 seconds** after generation — once consumed or expired, the backend rejects the URL. Call `generateUrl` again to mint a fresh URL; user/device come from SDK context.
+
+`generateUrl` throws a `400` if the Encryption Key is rejected (rotated, revoked, or otherwise invalid) or the payload otherwise fails validation — catch this the same way you'd catch a `401` from `initializeUserSession`.
+
+```ts
+const url = await SaversAppSDK.generateUrl({ screen: { name: 'EXPLORE' } });
+// https://testm.saversapp.com/?pRefCode=...&qP=...  (sandbox)
+```
+
+#### Entry Screen Options (`screen.name`)
+
+Use `screen` to land the user on a specific Savers App screen. If no routing attribute is provided, the user is directed to the `EXPLORE` page.
+
+| Name | Screen | Screen Attributes | Sample `screen` Param |
+|---|---|---|---|
+| `EXPLORE` | Offers exploration and categories page. The default screen if no routing attribute is provided. | NA | `{ name: 'EXPLORE' }` |
+| `OFFERS` | Offers page for the given category. | `[{ key: 'category', value: 'xxxx' }]` (required) | `{ name: 'OFFERS', attributes: [{ key: 'category', value: 'xxxx' }] }` |
+| `OFR_DETAILS` | Takes user to a specific offer's details page. | `[{ key: 'ofrId', value: 'xxxxx12345' }]` (required) | `{ name: 'OFR_DETAILS', attributes: [{ key: 'ofrId', value: 'xxxxx12345' }] }` |
+| `TRAVEL` | Dedicated members-only travel booking portal. | NA | `{ name: 'TRAVEL' }` |
+| `CARD_ENROLL` | Card Enrollment page. | NA | `{ name: 'CARD_ENROLL' }` |
+| `CARD_LIST` | List of enrolled cards. | NA | `{ name: 'CARD_LIST' }` |
+| `CASHBACK` | Cashback page showing transactions, including their statuses and payouts. | NA | `{ name: 'CASHBACK' }` |
+| `PAYOUT` | Payouts tab of the Cashback page, which shows user's list of payouts to date. | NA | `{ name: 'PAYOUT' }` |
+| `TRX` | Transactions tab of the Cashback page, which shows user's transactions to date. | NA | `{ name: 'TRX' }` |
+| `CONTACT` | Support page where user can submit a ticket. | NA | `{ name: 'CONTACT' }` |
+| `PROFILE` | User profile details page. | NA | `{ name: 'PROFILE' }` |
+| `FAV` | User's favorite offers page. | NA | `{ name: 'FAV' }` |
+| `INBOX` | User Inbox, which contains various notifications and recommendations. | NA | `{ name: 'INBOX' }` |
+| `NOTIF` | Notifications tab of the Inbox page. | NA | `{ name: 'NOTIF' }` |
+| `REC` | Recommendations tab of the Inbox page. | NA | `{ name: 'REC' }` |
+
+> **Testing `OFFERS` and `OFR_DETAILS`:** to test these screens, contact the Savers App team *(replace with the live contact before publishing this README)* to get the list of valid category names and test offer IDs.
+
+Nonce is fetched automatically from the stored `userId` + `pRefCode`. Coordinates from `registerDevice` / `setLocationCoordinates` are included in `deviceInfo.location` when set.
+
+Because `initializeUserSession` now establishes the session upfront (see [above](#2-user-session-and-device)), `generateUrl` encrypts the stored `sessionId` as `authSessionId` from the first call — the hosted app no longer needs a prior visit to restore login. `authSessionId` is only omitted if `initializeUserSession` hasn't been called yet, or the SDK hasn't captured a value for it.
+
+`qP` encryption matches the hosted web decrypt (via `react-native-aes-gcm-crypto` on this SDK's side):
+
+- AES-256-GCM
+- inner `hex(iv):base64(content):hex(tag)`
+- outer standard base64 (so the page can `atob(qP)`)
+
+### 4. HostedAppComponent
+
+Pass the generated URL into `HostedAppComponent`. To refresh a consumed URL, call `generateUrl` again and pass the new string.
+
+`HostedAppComponent` also requires `navigationRef` — the `navigationRef` your host app already created and attached to its own `NavigationContainer`. There's nothing new to set up for navigation: just pass in the ref your app already has. The SDK uses it to drive in-app navigation on your behalf (e.g. returning to your Hub screen on native Back, closing the current screen on `END_SESSION`) without you needing to wire that up yourself.
+
+```tsx
+import { HostedAppComponent } from '@savers_app/react-native-sdk';
+
+// navigationRef here is the same ref your app already passes to its own
+<HostedAppComponent
+  saversAppUrl={generatedUrl}
+  navigationRef={navigationRef}
+  onSaversSdkMessage={(raw, postBack) => {
+    // Required by HostedAppComponent. The SDK handles action dispatch
+    // internally (including ending the session), so no logic is needed
+    // here for a standard integration.
+  }}
+/>;
+```
+
+`navigationRef` must be the same ref instance passed to your app's `NavigationContainer`, and that container must already be mounted before `HostedAppComponent` attempts to navigate on it.
+
+`HostedAppComponent` maintains two WebViews (via `react-native-webview`) — at any point in time only one is active/visible, the other stays hidden (not destroyed).
+
+Flow:
+
+1. Load: WebView 1 opens `saversAppUrl`. Header and WebView 2 stay hidden.
+2. Hub → **Travel** tile: hosted app posts an envelope with the travel URL.
+3. SDK processes `open_travel`, hides WebView 1, shows header + WebView 2 with that URL.
+4. Header **Back** (native, no close Post Message required): hide WebView 2, show WebView 1 (still loaded), inject Hub navigation `{ type: 'NAVIGATE', route: 'Hub' }` via the `navigationRef` you passed to `HostedAppComponent`.
+
+Travel Post Message (from Hub):
+
+```json
+{
+  "target": "SDK",
+  "from": "savers",
+  "action": "open_travel",
+  "payload": { "url": "<TRAVEL_PORTAL_URL>" }
+}
+```
+
+Optional: `prepare_travel` (show header early), `close_travel` (same as native Back), `relay` between surfaces. Payload may include branding (`logo`, `backIconColor`, `loaderColor`).
+
+`HostedAppController.closeSession()` asks the Savers WebView to run Cognito `closeSession`.
+
+## Session & Login
+
+`initializeUserSession` calls a backend authorization endpoint internally, using the API key and encryption key you already passed to `initialize()`, together with the current profile and the `sessionId` already in storage if one exists. The endpoint is gated by a mandatory `x-api-key` plus payload signing, so only requests carrying valid partner credentials are accepted. The SDK persists only the `sessionId` it gets back — via `react-native-keychain` (see [Security](#security-where-credentials-must-live) above; Keychain/Keystore-backed) — and holds the access token **in the SDK's in-memory context only — never written to local storage or disk.** The SDK never holds a refresh token at all. The backend is the source of truth on both token and session validity: the SDK does not track expiry itself. When it needs an access token and doesn't have a valid one in memory, it asks the backend for one using the stored `sessionId`:
+
+- If the session is still valid, the backend issues a new access token (the refresh token, if the backend keeps one, stays unchanged server-side — the SDK never sees or manages it).
+- If the session itself is gone (expired/revoked), the backend returns `401` and the SDK silently re-runs the authorize flow using the profile it already holds in memory from the last `initializeUserSession` call — no action or re-login prompt is required from the host app. This mid-session recovery only covers the app's current run, since it relies on the profile still being in memory. A real app restart is covered a different way: the host app calls `initializeUserSession` again on login/startup per the [Quick Start](#2-user-session-and-device) flow, which now also sends the `sessionId` already in storage — so a restart typically reuses the existing session (with the profile refreshed) rather than creating a new one, and only falls back to a brand-new session if that stored `sessionId` turns out to be invalid. (Recommended, not yet confirmed as implemented: the silent mid-session retry should be capped rather than unbounded, so a backend that keeps rejecting doesn't loop indefinitely.)
+
+This means the only client-side credential that survives an app restart is the opaque, revocable `sessionId` — not a bearer token. Information Request Function calls authenticate with the in-memory access token via a `Bearer` header rather than a client-supplied `userId` (see [Information Request Functions](#information-request-functions) below) — this also closes off a client from being able to request another user's data just by passing a different `userId`.
+
+The `sessionId` itself is just an opaque reference your backend resolves — if it's missing, stale, or revoked, the web portal re-authenticates the user automatically and a new `sessionId` is issued. Treat `authSessionId` / `sessionId` as sensitive like any other session credential — don't log it or pass it through anything that could leak it (e.g. URL query strings). Holding the access token only in memory limits its exposure to disk-based extraction — it doesn't defend against a fully compromised device reading process memory directly, but that's a much higher bar than reading local storage. The `sessionId` gets the same disk-level protection, since it's held in `react-native-keychain` rather than plain storage.
+
+Re-calling the authorize endpoint with a `sessionId` that's still valid updates the profile on that existing session and returns the same `sessionId` rather than minting a new one — a new `sessionId` only appears once the previous session is no longer valid (or none was supplied yet).
+
+The access token is valid for **30 minutes**. The SDK doesn't need to track this itself (see the reactive, backend-authoritative refresh above) — it's noted here for context on how often an active session triggers a token refresh in the background.
+
+The Information Request Functions use the in-memory access token to authenticate on the SDK's behalf; those requests are protected with HMAC-SHA256 payload signing to prevent tampering in transit. Note this is a different property than app-instance attestation (Play Integrity / App Attest) — payload signing verifies a request wasn't altered, not that it came from a genuine, unmodified copy of the app. Attestation is not currently implemented.
+
+## Information Request Functions
+
+| Function | Purpose | Response shape |
+|---|---|---|
+| `getTotalEarnings()` | Fetch member earnings to date | `{ totalEarned }` — [full shape](#gettotalearnings) |
+| `getTransactions()` | Fetch member's latest reward transactions (30 days) | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [transaction] }` — [full shape](#gettransactions) |
+| `getEarnings()` | Member earnings/payouts by month (90 days) | `[{ year, month, totalEarned }]` — [full shape](#getearnings) |
+| `getRecommendations(limit, offset)` | Offer recommendations | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getrecommendations) |
+| `getFavouriteOffers(limit, offset)` | Fetch member's favorite offers | Paged `{ totalNumberOfPages, totalNumberOfRecords, items: [offer] }` — [full shape](#getfavouriteoffers) |
+
+### Response Shapes
+
+#### getTotalEarnings
+
+`getTotalEarnings()`
+
+```json
+{
+  "totalEarned": <STRING>
+}
+```
+
+#### getTransactions
+
+`getTransactions()`
+
+```json
+{
+  "totalNumberOfPages": <NUMBER>,
+  "totalNumberOfRecords": <NUMBER>,
+  "items": [
+    {
+      "transactionId": <STRING>,
+      "userId": <STRING>,
+      "purchaseAmount": <STRING>,
+      "rewardAmount": <STRING>,
+      "payoutId": <STRING>,
+      "status": <STRING>,
+      "dateTracked": <DATE_STRING>,
+      "dateConfirmed": <DATE_STRING>,
+      "datePaid": <DATE_STRING>,
+      "dateRejected": <DATE_STRING>
+    },
+    …
+  ]
+}
+```
+
+#### getEarnings
+
+`getEarnings()`
+
+```json
+[
+  {
+    "year": <YEAR>,
+    "month": <MONTH>,
+    "totalEarned": <STRING>
+  },
+  …
+]
+```
+
+#### getRecommendations
+
+`getRecommendations(limit: <NUMBER>, offset: <NUMBER>)`
+
+```json
+{
+  "totalNumberOfPages": <NUMBER>,
+  "totalNumberOfRecords": <NUMBER>,
+  "items": [
+    {
+      "offerId": <STRING>,
+      "canonicalBrandId": <STRING>,
+      "brandDba": <STRING>,
+      "brandLogo": <STRING>,
+      "brandLogoSm": <STRING>,
+      "reward": <STRING>,
+      "storeDetails": [
+        {
+          "id": <STRING>,
+          "city": <STRING>,
+          "name": <STRING>,
+          "phone": <STRING>,
+          "state": <STRING>,
+          "address1": <STRING>,
+          "isOnline": <BOOLEAN>,
+          "postCode": <STRING>,
+          "countryCode": <STRING>,
+          "geoLocation": {
+            "latitude": <FLOAT_NUMBER>,
+            "longitude": <FLOAT_NUMBER>
+          },
+          "supportedSchemes": <STRING>[]
+        }
+      ],
+      "title": <STRING>,
+      "redemptionType": <STRING>
+    },
+    …
+  ]
+}
+```
+
+#### getFavouriteOffers
+
+`getFavouriteOffers(limit: <NUMBER>, offset: <NUMBER>)`
+
+```json
+{
+  "totalNumberOfPages": <NUMBER>,
+  "totalNumberOfRecords": <NUMBER>,
+  "items": [
+    {
+      "offerId": <STRING>,
+      "canonicalBrandId": <STRING>,
+      "brandDba": <STRING>,
+      "brandLogo": <STRING>,
+      "brandLogoSm": <STRING>,
+      "reward": <STRING>,
+      "storeDetails": [
+        {
+          "id": <STRING>,
+          "city": <STRING>,
+          "name": <STRING>,
+          "phone": <STRING>,
+          "state": <STRING>,
+          "address1": <STRING>,
+          "isOnline": <BOOLEAN>,
+          "postCode": <STRING>,
+          "countryCode": <STRING>,
+          "geoLocation": {
+            "latitude": <FLOAT_NUMBER>,
+            "longitude": <FLOAT_NUMBER>
+          },
+          "supportedSchemes": <STRING>[]
+        }
+      ],
+      "title": <STRING>,
+      "redemptionType": <STRING>
+    },
+    …
+  ]
+}
+```
+
+None of these take a `userId` argument — the member is identified by the in-memory access token sent as a `Bearer` header (see [Session & Login](#session--login) above), not by a client-supplied ID. This also means a caller can't request another member's data by passing a different `userId`.
+
+From the React Native app, these SDK functions handle the request on the Host App's behalf — you don't need to call Savers App APIs directly to get this data.
+
+## Example App
+
+To run the example:
+
+```bash
+# Install dependencies (root + example workspace)
+npm install
+# or
+yarn install
+
+# Start the Metro bundler for the example app
+yarn workspace @saversapp/react-native-sdk-example start
+
+# Run the example app on a device / simulator (from the repo root)
+yarn run:ios     # uses scripts.run:ios from package.json
+yarn run:android # uses scripts.run:android from package.json
+```
+
+Demo notes:
+
+- Init uses sandbox credentials and `SdkEnvironment.sandbox`, then `initializeUserSession` + `registerDevice`.
+- **Open in Browser** / **Open in WebView** sit on the Generated URL card. WebView opens `HostedAppComponent`.
+- After encryption or init changes, do a full app restart rather than relying on Fast Refresh — native/session state can get out of sync with a hot reload.
+
+## Notes
+
+- Location permissions are required on Android and iOS for coordinate enrichment.
+- `encryptionKey` must be base64 of exactly 32 bytes (AES-256).
+- `pRefCode` and `initializeUserSession` are required before `generateUrl`.
+- The `sessionId` is stored via `react-native-keychain` (Keychain/Keystore-backed). `@react-native-async-storage/async-storage` is a separate, required dependency used for the SDK's other, non-sensitive local state — it does not hold the `sessionId`.
+- This package is public on npm; functionality requires valid partner credentials obtained per [Getting Access](#getting-access--partner-registration--credentials) — installing the package alone does not grant access to any Savers App data.
