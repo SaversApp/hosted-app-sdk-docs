@@ -2,7 +2,7 @@
 
 React Native SDK that embeds the Savers App experience inside your Host App. It keeps the hosted Savers web app loaded once in the background, shows it on your own routes (ready-made or custom screens), signs your members in, and gives you data functions (banners, categories, hub tiles, earnings, …) to build your own native screens.
 
-Package name: `@savers_app/react-native-sdk` · Version: **1.4.0**
+Package name: `@savers_app/react-native-sdk` · Version: **1.4.1**
 
 > **Upgrading from 1.3.x?** `generateUrl`, `HostedAppComponent` and the old `initialize({ pRefCode, … })` options are deprecated. See [Deprecation Notes & Migration](#deprecation-notes--migration).
 
@@ -202,6 +202,11 @@ const theme: SaversAppTheme = {
   secondary: '#FF9900',
   textPrimary: '#111111',
   textSecondary: '#555555', // status messages
+  // Optional — the SDK's native header (Embedded apps, Travel, sign-in / unavailable states):
+  logo: require('./assets/logo.png'),    // or { uri: 'https://…/logo.png' | '…/logo.svg' } or <Logo />; fitted within 160×80
+  logoSize: { width: 160, height: 60 },  // optional; max 160×80 — pass it for a remote logo to skip a short loader
+  logoPosition: 'right',                 // 'right' (default) or 'center'
+  backIcon: require('./assets/back.png'), // optional; default = SDK arrow in `primary`; 24×24
 };
 
 export default function App() {
@@ -225,7 +230,7 @@ export default function App() {
 
 | Prop | When it's called / what it does |
 |---|---|
-| `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button). |
+| `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`) and custom `backIcon`. Full apps use the Savers page's own header, so the logo and back icon apply only where the SDK draws the header. |
 | `onSignInRequired(screen?)` | A guest needs to sign in — **navigate to your sign-in / sign-up screen**. See [Step 5](#step-5--sign-in--sign-out). |
 | `onNavigateBack()` | The hosted page's own back arrow was tapped with nothing left to go back to — pop your route. |
 | `onEndSession()` | The user left the Savers experience (e.g. "Home" in Savers) — go to your home screen. |
@@ -350,6 +355,7 @@ Props (all optional):
 | `backIconColor` | `theme.primary` |
 | `nativeHeader` | By your app's registration (see [Headers](#headers)). `true` = native back-arrow header, `false` = the Savers page's own header. |
 | `category` (`OffersScreen` only) | The route's `category` param, e.g. `navigation.navigate('Offers', { category: 'food' })` |
+| `nearMe` (`OffersScreen` only) | The route's `nearMe` param — opens the **Near Me** offers map (`NEAR_ME`) at the device location from `registerDevice`, e.g. `navigation.navigate('Offers', { nearMe: true })` (all categories; `category` is ignored). |
 
 To pass props, render it as a child:
 
@@ -420,6 +426,7 @@ iOS swipe-back always pops the route through your navigator. With no `onBack`, t
 |---|---|---|
 | `EXPLORE` | Offers and categories (default) | — |
 | `OFFERS` | Offers for a category | `category` (required) |
+| `NEAR_ME` | The Near Me offers map (all categories) at the device location from `registerDevice` | — |
 | `OFR_DETAILS` | One offer's details | `ofrId` (required) |
 | `TRAVEL` | Members-only travel portal | — |
 | `CARD_ENROLL` | Card enrollment | — |
@@ -484,6 +491,7 @@ Use these to build native screens (home banners, category rails, hub tiles) with
 | Function | Signed in? | Returns |
 |---|---|---|
 | `getBanners(memberType?)` | No | Carousel banners |
+| `getStrings(scope, lang?)` | No | CMS copy (text) for your own screens |
 | `getCategories()` | No | Offer categories |
 | `getHubTiles()` | No | Hub tiles (member-specific when signed in) |
 | `getTotalEarnings()` | Yes | Earnings to date |
@@ -522,6 +530,32 @@ Returns your program's **carousel** banners.
     "rank": <NUMBER>
   }
 ]
+```
+
+### getStrings
+
+**Request**
+
+```ts
+const strings = await SaversAppSDK.getStrings(['S32', 'S32.2']); // lang defaults to 'en'
+```
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `scope` | string[] | Yes | CMS scopes to load (one per screen / section) |
+| `lang` | string | No | Default `'en'` |
+
+**Response** — read a value by `scope` + `name`; fall back to your own copy when it's missing.
+
+```json
+[
+  { "lang": <STRING>, "scope": <STRING>, "name": <STRING>, "val": <STRING> }
+]
+```
+
+```ts
+const text = (scope: string, name: string) =>
+  strings.find(s => s.scope === scope && s.name === name)?.val ?? '';
 ```
 
 ### getCategories
