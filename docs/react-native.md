@@ -2,7 +2,7 @@
 
 React Native SDK that embeds the Savers App experience inside your Host App. It keeps the hosted Savers web app loaded once in the background, shows it on your own routes (ready-made or custom screens), signs your members in, and gives you data functions (banners, categories, hub tiles, earnings, …) to build your own native screens.
 
-Package name: `@savers_app/react-native-sdk` · Version: **1.4.1**
+Package name: `@savers_app/react-native-sdk` · Version: **1.5.0**
 
 > **Upgrading from 1.3.x?** `generateUrl`, `HostedAppComponent` and the old `initialize({ pRefCode, … })` options are deprecated. See [Deprecation Notes & Migration](#deprecation-notes--migration).
 
@@ -14,13 +14,15 @@ Package name: `@savers_app/react-native-sdk` · Version: **1.4.1**
 - [Step 1 — Install](#step-1--install)
 - [Step 2 — Platform Setup](#step-2--platform-setup)
 - [Step 3 — Initialize the SDK](#step-3--initialize-the-sdk)
+  - [Certificate pinning (`sslPinning`)](#certificate-pinning-sslpinning)
 - [Step 4 — Add SaversAppProvider (load the WebView once)](#step-4--add-saversappprovider-load-the-webview-once)
 - [Step 5 — Sign In / Sign Out](#step-5--sign-in--sign-out)
+- [Profile Verification](#profile-verification)
 - [Session & Login](#session--login)
 - [Step 6 — Show Savers Screens](#step-6--show-savers-screens)
-  - [Option A: Ready-made screens](#option-a-ready-made-screens)
-  - [Option B: Custom screens](#option-b-custom-screens-hostedappscreen)
-  - [Option C: Open without a route](#option-c-open-without-a-route-usesaversapp)
+  - [Full app: SaversAppScreen](#full-app-saversappscreen)
+  - [Embedded app](#embedded-app) — [Option A: Ready-made screens](#option-a-ready-made-screens), [Option B: Custom screens](#option-b-custom-screens-hostedappscreen)
+  - [Screen names](#screen-names)
 - [Guest Mode](#guest-mode)
 - [Data Functions (for your own screens)](#data-functions-for-your-own-screens)
 - [Host ↔ Hosted App Communication](#host--hosted-app-communication)
@@ -107,7 +109,8 @@ npm install @react-native-async-storage/async-storage \
   react-native-get-random-values \
   react-native-safe-area-context \
   react-native-svg \
-  react-native-webview
+  react-native-webview \
+  react-native-ssl-public-key-pinning
 ```
 
 (or the same with `yarn add`). Then `cd ios && pod install`.
@@ -115,6 +118,7 @@ npm install @react-native-async-storage/async-storage \
 - `react-native-keychain` stores the member's session ID securely (iOS Keychain / Android Keystore). `async-storage` holds non-sensitive state only. Both are required.
 - `react-native-safe-area-context` is required — wrap your app in `<SafeAreaProvider>`.
 - **Expo:** works with a [development build](https://docs.expo.dev/develop/development-builds/introduction/), not Expo Go (`react-native-keychain` and `react-native-device-info` are native modules).
+- `react-native-ssl-public-key-pinning` turns on **certificate pinning** for the SDK's API calls (`api.saversapp.com`, `devapi.saversapp.com`): they only connect when the server's certificate chains to Savers App's pinned root certificates, which stops interception by a fake certificate. Install it — without it the SDK logs a warning and its API calls go out **unpinned**. The SDK sets it up in `initialize` (no code needed). It doesn't apply to the Savers WebViews. **If your app already pins its own domains**, see [Certificate pinning](#certificate-pinning-sslpinning).
 
 There is one package for both environments; you pick sandbox or production in `initialize`.
 
@@ -183,6 +187,66 @@ What's different from 1.3.x:
 - Network errors during the check are retried automatically (and immediately when the device comes back online).
 - Calling it again with the same keys does nothing. Different keys restart the check.
 
+### Certificate pinning (`sslPinning`)
+
+With `react-native-ssl-public-key-pinning` installed (see [Step 1](#step-1--install)), the SDK's API calls only connect to a server whose certificate chains to Savers App's pinned root certificates. Choose who sets it up with the `sslPinning` option of `initialize`:
+
+| `sslPinning` | Who sets up pinning | Use when |
+|---|---|---|
+| `'sdk'` (default — omit it) | **The SDK**, inside `initialize`. Every SDK API call waits until it's in place. | Your app doesn't use `react-native-ssl-public-key-pinning` itself. |
+| `'app'` | **Your app** — the SDK skips its own setup and only uses the pins you set. | Your app already pins its own domains with this library. |
+
+**Why `sslPinning: 'app'` exists:** the library keeps **one** pinning setup per app, and each `initializeSslPinning` call **replaces** the previous one. If your app and the SDK both called it, whichever ran last would wipe out the other's domains. With `'app'`, there's exactly one call — yours — containing both.
+
+**How to merge (`sslPinning: 'app'`):**
+
+1. Get the SDK's entries with `SaversAppSDK.getSslPinningConfig()`. It returns one entry per SDK API domain, in the library's format:
+
+   ```ts
+   {
+     'api.saversapp.com':    { includeSubdomains: false, publicKeyHashes: ['++MBgDH5…', 'f0KW/Ftq…', 'NqvDJlas…', '9+ze1cZg…'] },
+     'devapi.saversapp.com': { includeSubdomains: false, publicKeyHashes: [ /* same */ ] },
+   }
+   ```
+
+   It works before `initialize` (no network call). Always read it from the SDK — don't copy the hashes — so an SDK update with new certificates reaches your app.
+2. Spread it into **your** `initializeSslPinning` call, next to your own domains.
+3. **`await` that call, then** call `initialize` with `sslPinning: 'app'` — so the SDK's first API call (the App ID check, which starts inside `initialize`) is already pinned.
+
+```ts
+import { initializeSslPinning } from 'react-native-ssl-public-key-pinning';
+import { SaversAppSDK } from '@savers_app/react-native-sdk';
+
+async function setUpSavers() {
+  const { apiKey, encryptionKey } = await fetchKeysFromYourBackend();
+
+  // 1–2. ONE pinning setup for the whole app: your domains + the SDK's.
+  await initializeSslPinning({
+    ...SaversAppSDK.getSslPinningConfig(),
+    'api.yourapp.com': {
+      includeSubdomains: true,
+      publicKeyHashes: ['YOUR_PIN_1', 'YOUR_PIN_2'], // at least two per domain (iOS)
+    },
+  });
+
+  // 3. Then the SDK — told not to set pinning up itself.
+  SaversAppSDK.initialize({
+    environment: 'production',
+    apiKey,
+    encryptionKey,
+    appId: 'YOUR_APP_ID',
+    sslPinning: 'app',
+  });
+}
+```
+
+Good to know:
+
+- In `'app'` the SDK never calls `initializeSslPinning`, so it can't overwrite your setup. If you leave the SDK's entries out of your call, its API calls go out **unpinned** — always include them.
+- If you change your pinning later (another `initializeSslPinning` call), include `getSslPinningConfig()` again — the new call replaces everything.
+- The deprecated `initialize({ apiKey, encryptionKey, pRefCode, … })` options accept `sslPinning` too.
+- On an iOS Expo **development** build, `expo-dev-client`'s network inspector interferes with pinning — see the [library's notes](https://github.com/frw/react-native-ssl-public-key-pinning#expo-managed-workflow). Production builds are unaffected.
+
 ---
 
 ## Step 4 — Add SaversAppProvider (load the WebView once)
@@ -215,6 +279,7 @@ export default function App() {
       <SaversAppProvider
         theme={theme}
         onSignInRequired={() => navigationRef.navigate('SignIn')}
+        onSignOutRequested={signOut} // your logout, then SaversAppSDK.closeSession()
         onNavigateBack={() => navigationRef.goBack()}
         onEndSession={() => navigationRef.navigate('Home')}
         onConfigError={(e) => console.warn('Savers unavailable', e.code, e.message)}
@@ -230,9 +295,10 @@ export default function App() {
 
 | Prop | When it's called / what it does |
 |---|---|
-| `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`) and custom `backIcon`. Full apps use the Savers page's own header, so the logo and back icon apply only where the SDK draws the header. |
-| `onSignInRequired(screen?)` | A guest needs to sign in — **navigate to your sign-in / sign-up screen**. See [Step 5](#step-5--sign-in--sign-out). |
-| `onNavigateBack()` | The hosted page's own back arrow was tapped with nothing left to go back to — pop your route. |
+| `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`) and custom `backIcon`. Full apps use the Hosted App header, so the logo and back icon apply only where the SDK draws the header. |
+| `onSignInRequired(screen?)` | A guest needs to sign in (a members-only screen, or the Hub's **Sign in** tile) — **navigate to your sign-in / sign-up screen**. See [Step 5](#step-5--sign-in--sign-out). |
+| `onSignOutRequested()` | The member tapped **Sign out** in the Savers Hub — **sign them out of your app and call `SaversAppSDK.closeSession()`**. The Savers screen stays open, now signed out. See [Step 5](#step-5--sign-in--sign-out). |
+| `onNavigateBack()` | The Hosted App header's back arrow was tapped with nothing left to go back to — pop your route. |
 | `onEndSession()` | The user left the Savers experience (e.g. "Home" in Savers) — go to your home screen. |
 | `onConfigError(error)` | The App ID check failed. Savers screens show an "unavailable" message instead. |
 
@@ -265,6 +331,13 @@ navigation.goBack(); // back to the Savers screen they came from
 
 The provider passes the session to the hosted app automatically. Nothing else to wire up.
 
+**Profile verification** (only if Savers App has switched it on for your app): also pass a fresh one-time token from your server — see [Profile Verification](#profile-verification):
+
+```ts
+const profileToken = await yourApi.createSaversProfileToken(); // your server, per sign-in
+await SaversAppSDK.initializeUserSession(profile, { profileToken });
+```
+
 - Call it again on every app start / login — it reuses the stored session when still valid and refreshes the profile.
 - Expired tokens are refreshed silently in the background.
 
@@ -275,6 +348,72 @@ await SaversAppSDK.closeSession();
 ```
 
 This ends the session on the backend, clears the stored session, and signs the hosted app out too.
+
+Sign-in and sign-out always belong to your app — the Hosted App's Hub only asks for them:
+
+- **Sign in** tile (guests) → `onSignInRequired` — open your sign-in screen; after your login, call `initializeUserSession`.
+- **Sign out** tile (members) → `onSignOutRequested` — log out of your app, then call `closeSession()`:
+
+```tsx
+<SaversAppProvider
+  onSignOutRequested={async () => {
+    await myAuth.logout();              // your app's sign-out
+    await SaversAppSDK.closeSession();  // ends the Savers session too
+  }}
+>
+```
+
+---
+
+## Profile Verification
+
+An optional extra check, switched on per app by Savers App (agreed with you): when a member signs in, Savers asks **your server** to confirm the member, so a sign-in can't be faked from the app alone.
+
+**Flow**
+
+1. The member signs in to your app.
+2. Your server creates a **one-time `profileToken`** for that member (short expiry, single use).
+3. Your app calls `SaversAppSDK.initializeUserSession(profile, { profileToken })`.
+4. Savers calls **your verify API**, server to server, with the token.
+5. Your API returns that member's profile → Savers compares it with `profile` → the member is signed in, or the sign-in is refused.
+
+**Your verify API** (you build it; give Savers its URL, an API key and a signing secret):
+
+```http
+POST https://api.yourapp.com/savers/verify
+Content-Type: application/json
+x-api-key: <API key you gave Savers>
+x-signature: <HMAC-SHA256, hex, of the exact request body — key = your signing secret, base64-decoded>
+
+{ "profileToken": "...", "timestamp": 1761120000000, "nonce": "6f1c2b0e-…" }
+```
+
+- Check `x-api-key` and `x-signature` (compute the HMAC over the raw body bytes), and reject a `timestamp` older than a few minutes or a repeated `nonce`.
+- **Valid token → `200`** with the member's profile, in the **same format** you pass to `initializeUserSession` (optional fields may be `null` or left out):
+
+  ```json
+  { "userId": "SV-10293", "firstname": "Asha", "lastname": "Menon", "email": "asha@example.com", "phone": "+15551234567", "dob": null, "city": "New York", "zipcode": null }
+  ```
+
+- **Invalid / expired / used token → `401`.**
+- Answer within **5 seconds**.
+
+Savers checks that `userId` matches and that the **email** (case-insensitive) or the **phone** (digits only) matches — which one is agreed per app.
+
+**Good to know**
+
+- Create a **new token for every `initializeUserSession` call** — each one is used once.
+- Only **new** sessions are verified. While the member's session is active, the SDK re-signs in silently in the background without a token; after the session ends (or a reinstall), your app calls `initializeUserSession` with a fresh token again.
+- The SDK adds your App ID to the request itself — nothing else to pass.
+
+**Errors** (`SDKError.code` from `initializeUserSession`):
+
+| `code` | HTTP | Meaning |
+|---|---|---|
+| `INVALID_USER_SESSION` | 401 | No `profileToken`, or your API answered 401 |
+| `PROFILE_MISMATCH` | 422 | Your API returned a different member / email / phone than `profile` |
+| `PARTNER_VERIFICATION_UNAVAILABLE` | 503 | Your API didn't answer (timeout / error) — the sign-in is refused; try again |
+| `APP_ID_REQUIRED` | 400 | An old SDK version without the App ID — update the SDK |
 
 ---
 
@@ -314,14 +453,58 @@ What happens behind `initializeUserSession` and `closeSession` (Step 5). Nothing
 
 ## Step 6 — Show Savers Screens
 
-### Option A: Ready-made screens
+The Savers screens you show come from the **Hosted App** (a Savers App web page inside the SDK). Each screen has one of two headers:
 
-Drop them into your stack like any other screen. Each one handles Android back and iOS swipe-back, and never exits your app. Which header it shows depends on how your app is registered (see [Headers](#headers)).
+- **Hosted App header** — the Hosted App's own header.
+- **Native header** — a header the SDK draws in your app, with a back arrow.
+
+The SDK supports two ways to show the Hosted App — pick the one that fits your app:
+
+- **Full app** — you open **the whole Savers app** from one place (a tab or button) and members move around inside it. Use [`SaversAppScreen`](#full-app-saversappscreen).
+- **Embedded app** — Savers screens sit inside your own native UI, one at a time. See [Embedded app](#embedded-app).
+
+### Full app: `SaversAppScreen`
+
+One route opens the complete Savers app: it starts on Explore (the Savers home), and members reach everything else — offers, cashback, cards, Hub — inside it, with the Hosted App header. When there's nothing left to go back to in Savers, its back (and Android back) returns to your app.
+
+```tsx
+import { SaversAppScreen } from '@savers_app/react-native-sdk';
+
+<Stack.Screen name="Savers" component={SaversAppScreen} options={{ headerShown: false }} />
+
+// From your tab / button:
+navigation.navigate('Savers');
+```
+
+To open it on another page — e.g. from a push notification or deep link — pass `startScreen`: a [screen name](#screen-names), or a screen with attributes. As a prop, or as the route's `startScreen` param:
+
+```tsx
+navigation.navigate('Savers', { startScreen: 'CASHBACK' });
+
+<SaversAppScreen startScreen={{ name: 'OFR_DETAILS', attributes: [{ key: 'ofrId', value: '12345' }] }} />
+```
+
+| Prop | Default |
+|---|---|
+| `startScreen` | The route's `startScreen` param, else `EXPLORE` |
+| `onBack` | `navigation.goBack()` (does nothing if nothing is behind) |
+
+Expo Router: import it from `@savers_app/react-native-sdk/expo-router` (route param `startScreen`, e.g. `router.push({ pathname: '/savers', params: { startScreen: 'CASHBACK' } })`).
+
+Signing out (`SaversAppSDK.closeSession()`) while it's open keeps it open, now signed out — navigate away yourself if your app needs to.
+
+### Embedded app
+
+Show each Savers screen from your own UI: the ready-made screens (Option A), or your own route around any Savers screen (Option B).
+
+#### Option A: Ready-made screens
+
+Drop them into your stack like any other screen. Each one handles Android back and iOS swipe-back, and never exits your app. For the header each one shows, see [Headers](#headers).
 
 ```tsx
 import {
   OffersScreen, CashbackScreen, CardsScreen, CardEnrollScreen, TravelScreen,
-  SupportScreen, ProfileScreen, FavoritesScreen, InboxScreen,
+  SupportScreen, ProfileScreen, FavoritesScreen, InboxScreen, AboutUsScreen,
 } from '@savers_app/react-native-sdk';
 
 <Stack.Screen name="Offers"   component={OffersScreen}   options={{ headerShown: false }} />
@@ -330,22 +513,17 @@ import {
 <Stack.Screen name="Travel"   component={TravelScreen}   options={{ headerShown: false }} />
 ```
 
-Set `headerShown: false` — the SDK (or the Savers page) draws the header.
+Set `headerShown: false` — the SDK (or the Hosted App) draws the header.
 
-#### Headers
+##### Headers
 
-Which header a screen shows depends on how your app is registered with Savers App:
+| Screen | Header |
+|---|---|
+| `CashbackScreen`, `CardsScreen`, `CardEnrollScreen`, `TravelScreen`, `SupportScreen`, `ProfileScreen`, `FavoritesScreen`, `InboxScreen` | Native header with a back arrow |
+| `OffersScreen` | Hosted App header (location, map toggle, back) |
+| `AboutUsScreen` | No header (the Hosted App's own close button goes back) |
 
-- **Embedded app** (Savers screens sit inside your own native UI) — the ready-made screens use the **native header** with a back arrow.
-- **Full app** (you open the complete Savers app) — the **Savers page controls the header**; its back returns to your previous screen.
-
-| Screen | Embedded app | Full app |
-|---|---|---|
-| `CashbackScreen`, `CardsScreen`, `CardEnrollScreen`, `SupportScreen`, `ProfileScreen`, `FavoritesScreen`, `InboxScreen` | Native header with back arrow | The Savers page's own header |
-| `TravelScreen` | Native header | Native header |
-| `OffersScreen` | The Savers page's own header (location, map toggle, back) | Same |
-
-Pass `nativeHeader` to a screen to override this. In a full app, signing out (`SaversAppSDK.closeSession()`) while a Savers screen is open also takes the member back to your previous screen.
+Pass `nativeHeader` to a screen to override this (not `AboutUsScreen`, which never has one).
 
 Props (all optional):
 
@@ -353,9 +531,10 @@ Props (all optional):
 |---|---|
 | `onBack` | `navigation.goBack()` (does nothing if nothing is behind) |
 | `backIconColor` | `theme.primary` |
-| `nativeHeader` | By your app's registration (see [Headers](#headers)). `true` = native back-arrow header, `false` = the Savers page's own header. |
+| `nativeHeader` | As in [Headers](#headers). `true` = native back-arrow header, `false` = the Hosted App header. |
 | `category` (`OffersScreen` only) | The route's `category` param, e.g. `navigation.navigate('Offers', { category: 'food' })` |
 | `nearMe` (`OffersScreen` only) | The route's `nearMe` param — opens the **Near Me** offers map (`NEAR_ME`) at the device location from `registerDevice`, e.g. `navigation.navigate('Offers', { nearMe: true })` (all categories; `category` is ignored). |
+| `search` (`OffersScreen` only) | The route's `search` param — opens offer **search** in all categories (`SEARCH`), as the Explore search bar, e.g. `navigation.navigate('Offers', { search: true })` (`category` is ignored). |
 
 To pass props, render it as a child:
 
@@ -367,7 +546,7 @@ To pass props, render it as a child:
 
 > Ready-made screens use React Navigation. expo-router works too, in a development build (not Expo Go). On another navigator, use Option B.
 
-### Option B: Custom screens (`HostedAppScreen`)
+#### Option B: Custom screens (`HostedAppScreen`)
 
 Use `HostedAppScreen` to show any Savers screen with a **native back arrow** while you control focus and back.
 
@@ -382,7 +561,7 @@ function OfferDetailsScreen({ route }) {
       screen={{
         name: 'OFR_DETAILS',
         attributes: [{ key: 'ofrId', value: route.params.offerId }],
-        showHeader: false, // hide the Savers page's header — the native one is used
+        showHeader: false, // hide the Hosted App header — the native one is used
       }}
       focused={useIsFocused()}
       onBack={() => navigation.goBack()}
@@ -405,28 +584,31 @@ function OfferDetailsScreen({ route }) {
 |---|---|
 | `name` | Screen name (below) |
 | `attributes` | `[{ key, value }]` for screens that need them |
-| `showHeader` | `false` hides the Savers page's own header, `true` shows it, omitted = screen default |
-| `back` | Only matters when the Savers page draws the header — see [Back behaviour](#back-behaviour) |
+| `showHeader` | `false` hides the Hosted App header, `true` shows it, omitted = screen default |
+| `back` | Only matters when the Hosted App draws the header — see [Back behaviour](#back-behaviour) |
 
-#### Back behaviour
+##### Back behaviour
 
 Pick one setup. The first is what the ready-made screens (except `OffersScreen`) use.
 
 | Setup | Header the user sees | Back arrow | Android back button |
 |---|---|---|---|
 | **Native header** (default): `nativeHeader` omitted, `showHeader: false` | Your native back arrow | Calls `onBack` | Goes back inside Savers first; when Savers has no page left → `onBack` |
-| **Savers header, back to your app**: `nativeHeader={false}`, `showHeader: true`, `back: 'native'` (what `OffersScreen` uses) | The Savers page's header | Savers goes back inside its pages; when it has none left → `onBack` (or the provider's `onNavigateBack` if no `onBack`) | Same as the back arrow |
-| **Savers header, stays in Savers**: `nativeHeader={false}`, `showHeader: true`, `back` omitted | The Savers page's header | Savers goes back inside its pages; when none are left → Savers Explore | Goes back inside Savers; when none left → `onBack` |
+| **Hosted App header, back to your app**: `nativeHeader={false}`, `showHeader: true`, `back: 'native'` (what `OffersScreen` uses) | Hosted App header | Savers goes back inside its pages; when it has none left → `onBack` (or the provider's `onNavigateBack` if no `onBack`) | Same as the back arrow |
+| **Hosted App header, stays in Savers**: `nativeHeader={false}`, `showHeader: true`, `back` omitted | Hosted App header | Savers goes back inside its pages; when none are left → Savers Explore | Goes back inside Savers; when none left → `onBack` |
 
 iOS swipe-back always pops the route through your navigator. With no `onBack`, the ready-made screens use `navigation.goBack()`. Back never exits your app.
 
-#### Screen names
+### Screen names
+
+Used by `SaversAppScreen`'s `startScreen` and `HostedAppScreen`'s `screen`.
 
 | Name | Screen | Attributes |
 |---|---|---|
 | `EXPLORE` | Offers and categories (default) | — |
 | `OFFERS` | Offers for a category | `category` (required) |
 | `NEAR_ME` | The Near Me offers map (all categories) at the device location from `registerDevice` | — |
+| `SEARCH` | Search offers in all categories (the Explore search bar) | — |
 | `OFR_DETAILS` | One offer's details | `ofrId` (required) |
 | `TRAVEL` | Members-only travel portal | — |
 | `CARD_ENROLL` | Card enrollment | — |
@@ -438,23 +620,11 @@ iOS swipe-back always pops the route through your navigator. With no `onBack`, t
 | `PROFILE` | Profile details | — |
 | `FAV` | Favorite offers | — |
 | `INBOX` | Inbox | — |
+| `ABOUT_US` | About us (the program's intro and website link) | — |
 | `NOTIF` | Notifications tab of Inbox | — |
 | `REC` | Recommendations tab of Inbox | — |
 
 > To test `OFFERS` / `OFR_DETAILS`, use `SaversAppSDK.getCategories()` for valid category slugs, or contact Savers App support for test offer IDs.
-
-### Option C: Open without a route (`useSaversApp`)
-
-For a full-screen overlay without adding a route:
-
-```tsx
-const { open, hide, isVisible } = useSaversApp();
-
-open({ name: 'CASHBACK' }); // show
-hide();                     // back to your app (WebView stays loaded underneath)
-```
-
-Android back closes it. Prefer Options A/B when you want native back-stack behaviour.
 
 ---
 
@@ -823,7 +993,7 @@ Deprecated in **1.4.0** — these still work, but will be removed in a future ma
 |---|---|
 | `initialize({ apiKey, encryptionKey, pRefCode, signingKey?, environment: 'SANDBOX' \| 'PROD' })` | `initialize({ apiKey, encryptionKey, appId, environment: 'sandbox' \| 'production' })` |
 | `initialized(...)` | `initialize(...)` |
-| `generateUrl({ screen })` + `HostedAppComponent` | `SaversAppProvider` + ready-made screens / `HostedAppScreen` / `useSaversApp().open(screen)` |
+| `generateUrl({ screen })` + `HostedAppComponent` | `SaversAppProvider` + ready-made screens / `HostedAppScreen` |
 
 **Breaking changes in 1.4.0** — check these before upgrading:
 
@@ -838,6 +1008,8 @@ Deprecated in **1.4.0** — these still work, but will be removed in a future ma
 
   Components (`SaversAppProvider`, the screens, `HostedAppComponent`), `useSaversApp`, `SDKError` and the types are still exported by name.
 - **`SaversAppSDK.closeSession()` now fully signs the member out.** In 1.3.1 it only signed the hosted web page out. Now it also ends the backend session and deletes the stored session. Call it only on logout.
+
+**New in 1.4.1 — certificate pinning.** Install `react-native-ssl-public-key-pinning` (then `cd ios && pod install` / a new native build) — see [Step 1](#step-1--install). Nothing else to change: `initialize` sets it up. If your app already uses that library for its own domains, pass `sslPinning: 'app'` and merge `SaversAppSDK.getSslPinningConfig()` into your `initializeSslPinning` call. Without the library the SDK still works, unpinned (with a warning).
 
 Behaviour changes to know when migrating:
 
