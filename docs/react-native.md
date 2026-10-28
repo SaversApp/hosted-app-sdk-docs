@@ -17,6 +17,7 @@ Package name: `@savers_app/react-native-sdk` · Version: **1.5.0**
   - [Certificate pinning (`sslPinning`)](#certificate-pinning-sslpinning)
 - [Step 4 — Add SaversAppProvider (load the WebView once)](#step-4--add-saversappprovider-load-the-webview-once)
 - [Step 5 — Sign In / Sign Out](#step-5--sign-in--sign-out)
+- [Sign In with a One-Time Code (Savers)](#sign-in-with-a-one-time-code-savers)
 - [Profile Verification](#profile-verification)
 - [Session & Login](#session--login)
 - [Step 6 — Show Savers Screens](#step-6--show-savers-screens)
@@ -25,6 +26,7 @@ Package name: `@savers_app/react-native-sdk` · Version: **1.5.0**
   - [Screen names](#screen-names)
 - [Guest Mode](#guest-mode)
 - [Data Functions (for your own screens)](#data-functions-for-your-own-screens)
+- [Terms, Privacy Policy & FAQ](#terms-privacy-policy--faq)
 - [Host ↔ Hosted App Communication](#host--hosted-app-communication)
 - [Error Handling](#error-handling)
 - [Deprecation Notes & Migration](#deprecation-notes--migration)
@@ -300,6 +302,7 @@ export default function App() {
 | `onSignOutRequested()` | The member tapped **Sign out** in the Savers Hub — **sign them out of your app and call `SaversAppSDK.closeSession()`**. The Savers screen stays open, now signed out. See [Step 5](#step-5--sign-in--sign-out). |
 | `onNavigateBack()` | The Hosted App header's back arrow was tapped with nothing left to go back to — pop your route. |
 | `onEndSession()` | The user left the Savers experience (e.g. "Home" in Savers) — go to your home screen. |
+| `onSessionExpired({ guestMode })` | The member's session ended and the SDK has signed them out (`isSignedIn` false, guest mode applies). With `guestMode` false, tell the member and open your sign-in screen. |
 | `onConfigError(error)` | The App ID check failed. Savers screens show an "unavailable" message instead. |
 
 > `SaversAppProvider` throws `NOT_INITIALIZED` if it renders before `SaversAppSDK.initialize(...)`.
@@ -308,7 +311,7 @@ export default function App() {
 
 ## Step 5 — Sign In / Sign Out
 
-Your app owns sign-in. Add a **sign-in route** to your navigator and point `onSignInRequired` at it. The SDK calls it when a guest taps "Sign in" inside Savers, or opens a members-only screen.
+Your app owns sign-in — with your own login (below), or with a one-time code from Savers ([Sign In with a One-Time Code](#sign-in-with-a-one-time-code-savers)). Add a **sign-in route** to your navigator and point `onSignInRequired` at it. The SDK calls it when a guest taps "Sign in" inside Savers, or opens a members-only screen.
 
 On that screen, after your own login succeeds, start the Savers session:
 
@@ -331,7 +334,7 @@ navigation.goBack(); // back to the Savers screen they came from
 
 The provider passes the session to the hosted app automatically. Nothing else to wire up.
 
-**Profile verification** (only if Savers App has switched it on for your app): also pass a fresh one-time token from your server — see [Profile Verification](#profile-verification):
+**Profile verification** (required — Savers App only accepts members your server vouches for): also pass a fresh one-time token from your server — see [Profile Verification](#profile-verification):
 
 ```ts
 const profileToken = await yourApi.createSaversProfileToken(); // your server, per sign-in
@@ -365,9 +368,99 @@ Sign-in and sign-out always belong to your app — the Hosted App's Hub only ask
 
 ---
 
+## Sign In with a One-Time Code (Savers)
+
+If your app doesn't have its own login, Savers can sign your members in with a one-time code — by **email** or **SMS**, whichever Savers App set up for your app. How members sign in is set per app by Savers App — check `useSaversApp().appInfo` before showing these screens:
+
+| `integrationMode` | How members sign in | Calls that work |
+|---|---|---|
+| `0` | Not set up — every sign-in is refused | — |
+| `1` | Your app signs them in; your server vouches for each session ([Profile Verification](#profile-verification)) | `initializeUserSession` (with `profileToken`) |
+| `2` | Savers code sign-in; members come from your system — Savers looks them up through your APIs ([Members from your system](#members-from-your-system-with-code-sign-in)) | `requestSignIn` / `verifySignIn` |
+| `3` | Savers code sign-in **and sign-up**; members belong to Savers App | `requestSignIn` / `verifySignIn`, `requestSignUp` / `verifySignUp` |
+
+Other sign-in calls fail with `SIGNIN_DISABLED` (403). `signInMode` (`'email'` or `'phone'`) is what members sign in with.
+
+### Sign in
+
+```ts
+// 1. Send a code (userName = email or E.164 phone — your app's signInMode)
+const { requestKey, destinationHint } = await SaversAppSDK.requestSignIn({ userName: 'asha@example.com' });
+// → show "Enter the code sent to {destinationHint}"   ("a***@example.com" or "…4567")
+
+// 2. Check the code — the member is signed in (same session as initializeUserSession)
+const { profile } = await SaversAppSDK.verifySignIn({ requestKey, otp: '482917' });
+navigation.goBack();
+```
+
+- The code is valid for **15 minutes**; **3 wrong tries** → `429`, send a new one (`requestSignIn` again).
+- Not a member (`404`): in mode `3`, take them to your sign-up screen with the email / phone filled in.
+- The member's details are in `useSaversApp().member` (and `profile` above); `isSignedIn` turns true.
+
+### Sign up (`integrationMode` 3)
+
+```ts
+// Prefill (optional): ZIP, city, state — from the location you passed to registerDevice,
+// else from the phone once it's typed
+const address = await SaversAppSDK.getSignUpAddress({ phone: '+15551234567' });
+// A typed ZIP → its cities to pick from
+const { cities } = await SaversAppSDK.getCitiesForZip('10001');
+
+// 1. Send a code to the new member (email or SMS — your app's signInMode)
+const { requestKey } = await SaversAppSDK.requestSignUp({
+  email: 'asha@example.com',
+  phone: '+15551234567',
+  firstName: 'Asha',
+  lastName: 'Menon',
+  dateOfBirth: '1990-05-21',      // optional, YYYY-MM-DD
+  zipCode: address.zipCode ?? undefined, // optional
+  city: address.city ?? undefined,       // optional
+  state: address.state ?? undefined,     // optional
+  lat: address.lat ?? undefined,         // optional, where the address came from
+  lng: address.lng ?? undefined,
+});
+
+// 2. Check the code — the member is created and signed in (like verifySignIn)
+await SaversAppSDK.verifySignUp({ requestKey, otp: '482917' });
+```
+
+Nothing is created until the code is checked. `ALREADY_MEMBER` (409) means the email (email mode) or phone (phone mode) is already registered — offer sign-in instead.
+
+### After an app restart
+
+Call `restoreSession()` from your splash screen — it resumes the code sign-in session kept in the Keychain:
+
+```ts
+const { restored, profile } = await SaversAppSDK.restoreSession();
+// restored: false → nobody signed in, or the session ended (sign in again)
+```
+
+### When the session ends
+
+When a session ends (its time is up, or it was signed out elsewhere), the SDK signs the member out itself — `isSignedIn` turns false, guest mode applies — and calls `SaversAppProvider`'s `onSessionExpired({ guestMode })`. With `guestMode` false, tell the member and open your sign-in screen.
+
+**Errors** (`SDKError.code`):
+
+| `code` | HTTP | From | Meaning |
+|---|---|---|---|
+| `SIGNIN_DISABLED` | 403 | `requestSignIn`, `requestSignUp` | Code sign-in isn't set up for your app (`integrationMode` not 2 or 3) |
+| `SIGNUP_DISABLED` | 403 | `requestSignUp` | Sign-up isn't set up for your app (`integrationMode` 2) |
+| `SIGNIN_MODE_MISMATCH` | 400 | `requestSignIn` | Email given to a phone-mode app, or the other way round |
+| — (`statusCode` 404) | 404 | `requestSignIn` | Not a member |
+| `ALREADY_MEMBER` | 409 | `requestSignUp`, `verifySignUp` | The email / phone is already registered |
+| — (`statusCode` 400) | 400 | `verifySignIn`, `verifySignUp` | Wrong or expired code |
+| — (`statusCode` 429) | 429 | `verifySignIn`, `verifySignUp` | Too many tries — send a new code |
+
+Apps whose members come from your system have more — see [Members from your system](#members-from-your-system-with-code-sign-in).
+
+---
+
 ## Profile Verification
 
-An optional extra check, switched on per app by Savers App (agreed with you): when a member signs in, Savers asks **your server** to confirm the member, so a sign-in can't be faked from the app alone.
+Savers App only signs in members that come from a trusted source, so a sign-in can't be faked from the app alone. Savers asks **your server** to confirm the member — set up per app with Savers App (`appInfo.integrationMode`):
+
+- **`1` — Your app signs members in** (`initializeUserSession`): your server confirms each new session with a one-time token — below. In any other mode, `initializeUserSession` fails with `SIGNIN_DISABLED`.
+- **`2` — Savers signs your members in with a one-time code** (`requestSignIn` / `verifySignIn`): Savers looks the member up in your system — see [Members from your system with code sign-in](#members-from-your-system-with-code-sign-in).
 
 **Flow**
 
@@ -398,7 +491,7 @@ x-signature: <HMAC-SHA256, hex, of the exact request body — key = your signing
 - **Invalid / expired / used token → `401`.**
 - Answer within **5 seconds**.
 
-Savers checks that `userId` matches and that the **email** (case-insensitive) or the **phone** (digits only) matches — which one is agreed per app.
+Savers checks that `userId` matches and that the **email** (case-insensitive) or the **phone** (digits only) matches — your app's sign-in mode (email or phone), agreed with Savers App.
 
 **Good to know**
 
@@ -414,6 +507,41 @@ Savers checks that `userId` matches and that the **email** (case-insensitive) or
 | `PROFILE_MISMATCH` | 422 | Your API returned a different member / email / phone than `profile` |
 | `PARTNER_VERIFICATION_UNAVAILABLE` | 503 | Your API didn't answer (timeout / error) — the sign-in is refused; try again |
 | `APP_ID_REQUIRED` | 400 | An old SDK version without the App ID — update the SDK |
+| `SIGNIN_DISABLED` | 403 | Your app isn't set up for `initializeUserSession` (`integrationMode` not 1) — contact Savers App |
+
+### Members from your system with code sign-in
+
+When Savers signs your members in with a one-time code (`requestSignIn` → `verifySignIn`), your members stay in **your** system. Savers calls two APIs you build — same `x-api-key`, `x-signature`, `timestamp` / `nonce` checks and 5-second limit as the verify API:
+
+1. **Lookup** (on `requestSignIn`) — is this email / phone your member?
+
+   ```http
+   POST https://api.yourapp.com/savers/lookup
+   { "email": "asha@example.com", "timestamp": 1761120000000, "nonce": "…" }   // or "phone": "+15551234567"
+   ```
+
+   - Your member → **`200`** `{ "userId": "SV-10293" }` — Savers sends the code to that email / phone.
+   - Not your member → **`404`** — `requestSignIn` fails with `USER_NOT_FOUND`.
+
+2. **Profile** (on `verifySignIn`, once the code is right) — the member's profile:
+
+   ```http
+   POST https://api.yourapp.com/savers/profile
+   { "userId": "SV-10293", "timestamp": 1761120000000, "nonce": "…" }
+   ```
+
+   - **`200`** with the profile in the same format as the verify API (`email` is required). Savers checks the `userId` and that the email / phone is the one the code went to, then signs the member in (and keeps their details up to date from it).
+   - No longer your member → **`404`**.
+
+**Errors** (`SDKError.code` from `requestSignIn` / `verifySignIn`):
+
+| `code` | HTTP | Meaning |
+|---|---|---|
+| `USER_NOT_FOUND` | 404 | Your lookup / profile API answered 404 |
+| `PROFILE_MISMATCH` | 422 | The profile is another member, or another email / phone than the code went to |
+| `ALREADY_MEMBER` | 409 | That email / phone already belongs to another of your members at Savers |
+| `PARTNER_VERIFICATION_UNAVAILABLE` | 503 | Your API didn't answer (timeout / error / refused) — try again |
+| `SIGNIN_DISABLED` | 403 | Your app isn't set up for this (`integrationMode` not 2) |
 
 ---
 
@@ -621,6 +749,7 @@ Used by `SaversAppScreen`'s `startScreen` and `HostedAppScreen`'s `screen`.
 | `FAV` | Favorite offers | — |
 | `INBOX` | Inbox | — |
 | `ABOUT_US` | About us (the program's intro and website link) | — |
+| `INTRO` | The onboarding intro; finishing or cancelling it lands on Explore — e.g. a member's first open of the Full app (`startScreen: 'INTRO'`) | — |
 | `NOTIF` | Notifications tab of Inbox | — |
 | `REC` | Recommendations tab of Inbox | — |
 
@@ -929,6 +1058,210 @@ const page = await SaversAppSDK.getFavoriteOffers({ limit: 10, offset: 0 });
 
 ---
 
+## Terms, Privacy Policy & FAQ
+
+Your program's Terms & Conditions, Privacy Policy and FAQ come from Savers, so you can show them in your own screens and change them without an app release. Savers also tracks which T&C version each member accepted.
+
+| Function | Signed in? | Returns |
+|---|---|---|
+| `getLegalDocument(docType, lang?)` | No | The current T&C (`'TC'`) or Privacy Policy (`'PP'`) |
+| `getFaq(lang?)` | No | FAQ sections and questions |
+| `getPendingTerms(lang?)` | Yes | T&C the member must accept / Privacy Policy updates to show |
+| `acceptTerms({ documents, lang? })` | Yes | Records the member's acceptance (nothing returned) |
+
+`lang` defaults to `'en'`. When your program has no content in the language asked for, English comes back — the result's `lang` says which.
+
+### Showing the content (HTML)
+
+Content comes as HTML using only these tags: `b`, `i`, `u`, `p`, `ul`, `ol`, `li`, `a`, `br`, `h3`. No inline styles — your app chooses the fonts and colours. Render it natively, for example with [`@native-html/render`](https://www.npmjs.com/package/@native-html/render):
+
+```tsx
+import RenderHtml from '@native-html/render';
+import { useWindowDimensions } from 'react-native';
+
+const { width } = useWindowDimensions();
+<RenderHtml
+  source={{ html: document.contentHtml }}
+  contentWidth={width - 32}
+  tagsStyles={{ b: { fontWeight: 'bold' }, a: { color: '#0A78B4' } }}
+/>;
+```
+
+### getLegalDocument
+
+**Request**
+
+```ts
+const terms = await SaversAppSDK.getLegalDocument('TC');
+const privacy = await SaversAppSDK.getLegalDocument('PP', 'en');
+```
+
+**Response** — the highest published version already in effect:
+
+```json
+{
+  "docType": "TC" | "PP",
+  "version": <NUMBER>,
+  "lang": <STRING>,
+  "title": <STRING>,
+  "contentHtml": <STRING>,
+  "effectiveAt": <ISO DATE STRING>
+}
+```
+
+Rejects with `statusCode` 404 when your program has no document of that type yet.
+
+### getFaq
+
+**Request**
+
+```ts
+const { sections } = await SaversAppSDK.getFaq();
+```
+
+**Response** — sections and their questions in display order; `sections` is empty when there's no FAQ yet:
+
+```json
+{
+  "lang": <STRING>,
+  "sections": [
+    {
+      "id": <NUMBER>,
+      "title": <STRING>,
+      "items": [
+        { "id": <NUMBER>, "question": <STRING>, "answerHtml": <STRING> },
+        …
+      ]
+    },
+    …
+  ]
+}
+```
+
+Show each section's questions as a collapsible list, with `answerHtml` rendered as above.
+
+### Keeping members on the current T&C
+
+When the T&C change in a way members must agree to, signed-in members have to accept the new version before they carry on. Privacy Policy updates are only shown, not accepted.
+
+1. Call `getPendingTerms()` **after sign-in / sign-up and every time your app comes to the foreground.** Checking only at sign-in isn't enough — members can stay signed in for a long time.
+2. For each item:
+   - `action: 'accept'` (T&C) — show a full-screen page with the content, **Accept** and **Decline**. It can't be dismissed. Accept → `acceptTerms`. Decline → sign the member out with `SaversAppSDK.closeSession()`.
+   - `action: 'notify'` (Privacy Policy) — show the content once with **OK**, then `acceptTerms` (recorded as seen).
+3. Empty list → nothing to show.
+
+If the check fails (e.g. offline), let the member carry on and check again next time the app opens.
+
+### getPendingTerms
+
+**Request**
+
+```ts
+const pending = await SaversAppSDK.getPendingTerms();
+```
+
+**Response** — `getLegalDocument`'s fields plus `action`, T&C first:
+
+```json
+[
+  {
+    "docType": "TC",
+    "version": <NUMBER>,
+    "lang": <STRING>,
+    "title": <STRING>,
+    "contentHtml": <STRING>,
+    "effectiveAt": <ISO DATE STRING>,
+    "action": "accept" | "notify"
+  },
+  …
+]
+```
+
+### acceptTerms
+
+**Request** — the versions the member was shown:
+
+```ts
+await SaversAppSDK.acceptTerms({
+  documents: [{ docType: item.docType, version: item.version }],
+  lang: item.lang,
+});
+```
+
+Sending a version again is harmless. A version that isn't current for your program is rejected (`statusCode` 400).
+
+### At sign-up
+
+Signing up means agreeing to the T&C and Privacy Policy linked on your sign-up form. Right after `verifySignUp` succeeds, record both current versions so a new member doesn't see the blocker straight away:
+
+```ts
+const [terms, privacy] = await Promise.all([
+  SaversAppSDK.getLegalDocument('TC'),
+  SaversAppSDK.getLegalDocument('PP'),
+]);
+await SaversAppSDK.acceptTerms({
+  documents: [
+    { docType: terms.docType, version: terms.version },
+    { docType: privacy.docType, version: privacy.version },
+  ],
+});
+```
+
+Do this before your first `getPendingTerms()` call for the new member. If it fails, the member simply sees the T&C page and accepts there.
+
+### Example: T&C gate
+
+```tsx
+import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
+import { SaversAppSDK, useSaversApp, type PendingTerms } from '@savers_app/react-native-sdk';
+
+export function TermsGate() {
+  const { isSignedIn } = useSaversApp();
+  const [pending, setPending] = useState<PendingTerms[]>([]);
+
+  useEffect(() => {
+    if (!isSignedIn) return;
+    let active = true;
+    const check = () =>
+      SaversAppSDK.getPendingTerms()
+        .then(result => active && setPending(result))
+        .catch(() => {}); // offline: check again next time
+    check();
+    const sub = AppState.addEventListener('change', s => s === 'active' && check());
+    return () => {
+      active = false;
+      sub.remove();
+      setPending([]);
+    };
+  }, [isSignedIn]);
+
+  const current = isSignedIn ? pending[0] : undefined;
+  if (!current) return null;
+
+  const accept = async () => {
+    await SaversAppSDK.acceptTerms({
+      documents: [{ docType: current.docType, version: current.version }],
+      lang: current.lang,
+    });
+    setPending(items => items.slice(1));
+  };
+
+  return (
+    <YourFullScreenModal
+      html={current.contentHtml}
+      primaryLabel={current.action === 'accept' ? 'I accept' : 'OK'}
+      onPrimary={accept}
+      onDecline={current.action === 'accept' ? () => SaversAppSDK.closeSession() : undefined}
+    />
+  );
+}
+```
+
+Render it once inside `SaversAppProvider`, e.g. next to your navigator.
+
+---
+
 ## Host ↔ Hosted App Communication
 
 Your app and the hosted Savers app talk to each other through **WebView messages**, and the SDK handles them for you: passing the session, switching screens, back navigation, sign-in requests, opening the travel portal, the phone dialer, maps and external links. You don't need to send or listen to these messages yourself. Just provide the `SaversAppProvider` callbacks.
@@ -973,8 +1306,9 @@ Network errors during the App ID check are **not** reported through `onConfigErr
 | Code | Cause | Fix |
 |---|---|---|
 | `EMAIL_ALREADY_IN_USE` (409) | `initializeUserSession`: the email belongs to another member | Ask the member to sign in with their existing account, or use another email |
-| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`, `getTransactions`, `getRecommendations`, `getFavoriteOffers`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
-| `SESSION_EXPIRED` | The session expired and the SDK couldn't renew it silently (e.g. after an app restart without `initializeUserSession`) | Call `initializeUserSession` again |
+| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`, `getTransactions`, `getRecommendations`, `getFavoriteOffers`, `getPendingTerms`, `acceptTerms`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
+| `SESSION_EXPIRED` | The session ended (time up or signed out elsewhere) — the SDK has signed the member out and called `onSessionExpired` | Sign the member in again (`initializeUserSession` with a fresh `profileToken`, or code sign-in) |
+| `INVALID_INPUT` | A required argument is missing or invalid (e.g. `getLegalDocument` with a `docType` other than `'TC'` / `'PP'`, `acceptTerms` with no `documents`) | Fix the call |
 | `NETWORK_ERROR` | No connection / request failed, or the App ID check is still unanswered after 15 s (e.g. offline at launch) | Retry, or show an offline message |
 
 **Render error:**
@@ -994,6 +1328,13 @@ Deprecated in **1.4.0** — these still work, but will be removed in a future ma
 | `initialize({ apiKey, encryptionKey, pRefCode, signingKey?, environment: 'SANDBOX' \| 'PROD' })` | `initialize({ apiKey, encryptionKey, appId, environment: 'sandbox' \| 'production' })` |
 | `initialized(...)` | `initialize(...)` |
 | `generateUrl({ screen })` + `HostedAppComponent` | `SaversAppProvider` + ready-made screens / `HostedAppScreen` |
+
+Deprecated in **1.6.0**:
+
+| Deprecated | Use instead |
+|---|---|
+| `requestOtp(...)` | `requestSignIn(...)` — same input and result |
+| `verifyOtp(...)` | `verifySignIn(...)` — same input and result |
 
 **Breaking changes in 1.4.0** — check these before upgrading:
 
