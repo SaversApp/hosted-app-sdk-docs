@@ -2,7 +2,7 @@
 
 React Native SDK that embeds the Savers App experience inside your Host App. It keeps the hosted Savers web app loaded once in the background, shows it on your own routes (ready-made or custom screens), signs your members in, and gives you data functions (banners, categories, hub tiles, earnings, …) to build your own native screens.
 
-Package name: `@savers_app/react-native-sdk` · Version: **1.5.1**
+Package name: `@savers_app/react-native-sdk` · Version: **1.5.2**
 
 > **Upgrading from 1.3.x?** `generateUrl`, `HostedAppComponent` and the old `initialize({ pRefCode, … })` options are deprecated. See [Deprecation Notes & Migration](#deprecation-notes--migration).
 
@@ -1329,7 +1329,7 @@ Deprecated in **1.4.0** — these still work, but will be removed in a future ma
 | `initialized(...)` | `initialize(...)` |
 | `generateUrl({ screen })` + `HostedAppComponent` | `SaversAppProvider` + ready-made screens / `HostedAppScreen` |
 
-Deprecated in **1.6.0**:
+Deprecated in **1.5.1**:
 
 | Deprecated | Use instead |
 |---|---|
