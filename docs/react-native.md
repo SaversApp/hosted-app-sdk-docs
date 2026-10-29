@@ -2,7 +2,7 @@
 
 React Native SDK that embeds the Savers App experience inside your Host App. It keeps the hosted Savers web app loaded once in the background, shows it on your own routes (ready-made or custom screens), signs your members in, and gives you data functions (banners, categories, hub tiles, earnings, …) to build your own native screens.
 
-Package name: `@savers_app/react-native-sdk` · Version: **1.5.2**
+Package name: `@savers_app/react-native-sdk` · Version: **1.5.4**
 
 > **Upgrading from 1.3.x?** `generateUrl`, `HostedAppComponent` and the old `initialize({ pRefCode, … })` options are deprecated. See [Deprecation Notes & Migration](#deprecation-notes--migration).
 
@@ -18,11 +18,12 @@ Package name: `@savers_app/react-native-sdk` · Version: **1.5.2**
 - [Step 4 — Add SaversAppProvider (load the WebView once)](#step-4--add-saversappprovider-load-the-webview-once)
 - [Step 5 — Sign In / Sign Out](#step-5--sign-in--sign-out)
 - [Sign In with a One-Time Code (Savers)](#sign-in-with-a-one-time-code-savers)
+- [Biometric Sign-In](#biometric-sign-in)
 - [Profile Verification](#profile-verification)
 - [Session & Login](#session--login)
 - [Step 6 — Show Savers Screens](#step-6--show-savers-screens)
-  - [Full app: SaversAppScreen](#full-app-saversappscreen)
-  - [Embedded app](#embedded-app) — [Option A: Ready-made screens](#option-a-ready-made-screens), [Option B: Custom screens](#option-b-custom-screens-hostedappscreen)
+  - [Full app: FullAppScreen](#full-app-fullappscreen)
+  - [Embedded app](#embedded-app) — [Option A: Ready-made screens](#option-a-ready-made-screens), [Option B: Custom screens](#option-b-custom-screens-embeddedappscreen)
   - [Screen names](#screen-names)
 - [Guest Mode](#guest-mode)
 - [Data Functions (for your own screens)](#data-functions-for-your-own-screens)
@@ -43,7 +44,7 @@ Your App
      ├─ your NavigationContainer
      │   ├─ your native screens   ← use SaversAppSDK.getBanners(), getCategories(), …
      │   ├─ CashbackScreen        ← ready-made Savers screen (native back arrow)
-     │   └─ HostedAppScreen       ← your custom Savers screen
+     │   └─ EmbeddedAppScreen     ← your custom Savers screen
      └─ Savers WebView (hidden until a Savers screen is focused)
 ```
 
@@ -117,9 +118,10 @@ npm install @react-native-async-storage/async-storage \
 
 (or the same with `yarn add`). Then `cd ios && pod install`.
 
+- **The SDK has its own native code** — a per-device signing key kept in the Secure Enclave (iOS) / Android Keystore, which signs the SDK's API calls. After installing **or updating** the SDK, rebuild the app (`pod install`, then a fresh iOS / Android build); a JavaScript reload isn't enough. Without the rebuild the SDK still works, but logs `device key unavailable` and signs with the shared key only.
 - `react-native-keychain` stores the member's session ID securely (iOS Keychain / Android Keystore). `async-storage` holds non-sensitive state only. Both are required.
 - `react-native-safe-area-context` is required — wrap your app in `<SafeAreaProvider>`.
-- **Expo:** works with a [development build](https://docs.expo.dev/develop/development-builds/introduction/), not Expo Go (`react-native-keychain` and `react-native-device-info` are native modules).
+- **Expo:** works with a [development build](https://docs.expo.dev/develop/development-builds/introduction/), not Expo Go (the SDK's device key, `react-native-keychain` and `react-native-device-info` are native code). Rebuild it after updating the SDK.
 - `react-native-ssl-public-key-pinning` turns on **certificate pinning** for the SDK's API calls (`api.saversapp.com`, `devapi.saversapp.com`): they only connect when the server's certificate chains to Savers App's pinned root certificates, which stops interception by a fake certificate. Install it — without it the SDK logs a warning and its API calls go out **unpinned**. The SDK sets it up in `initialize` (no code needed). It doesn't apply to the Savers WebViews. **If your app already pins its own domains**, see [Certificate pinning](#certificate-pinning-sslpinning).
 
 There is one package for both environments; you pick sandbox or production in `initialize`.
@@ -167,15 +169,30 @@ async function setUpSavers() {
     appId: 'YOUR_APP_ID',
   });
 
-  // Recommended: register the device. Call again on each visit to refresh location.
+  // Recommended: register the device on every app start, and again when anything below changes.
   SaversAppSDK.registerDevice({
     deviceId: await DeviceInfo.getUniqueId(),
-    location: { lat, lng }, // optional — only if your app already has it
+    location: { lat, lng },           // optional — only if your app already has it
+    pushToken: 'FCM_OR_APNS_TOKEN',   // optional — once your app has one
+    notificationPermission: true,     // optional
+    locationPermission: true,         // optional
   });
 }
 ```
 
 Neither call needs `await`: both return immediately.
+
+**`registerDevice`** registers the device with Savers App in the background (after the App ID check) and gives the hosted app its id and location. Call it **before the member signs in**: every sign-in (`initializeUserSession`, code sign-in, sign-up, biometric) links this device to the member, and [biometric sign-in](#biometric-sign-in) needs it.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `deviceId` | Yes | A stable id for this install, e.g. `DeviceInfo.getUniqueId()` |
+| `location` | No | `{ lat, lng }` — nearby offers, Near Me, sign-up prefill |
+| `pushToken` | No | Push notification token (FCM / APNs), once you have one |
+| `notificationPermission` | No | Whether the member allowed notifications |
+| `locationPermission` | No | Whether the member allowed location |
+
+Left-out fields keep their last value (a new device starts with no push token and both permissions `false`). Sending the same details again does nothing; a failed registration is retried on your next call.
 
 | `environment` | Hosted app |
 |---|---|
@@ -272,6 +289,7 @@ const theme: SaversAppTheme = {
   logo: require('./assets/logo.png'),    // or { uri: 'https://…/logo.png' | '…/logo.svg' } or <Logo />; fitted within 160×80
   logoSize: { width: 160, height: 60 },  // optional; max 160×80 — pass it for a remote logo to skip a short loader
   logoPosition: 'right',                 // 'right' (default) or 'center'
+  headerHeight: 72,                      // optional; header row height in pt (default 44, or the logo's height + 12)
   backIcon: require('./assets/back.png'), // optional; default = SDK arrow in `primary`; 24×24
 };
 
@@ -297,7 +315,7 @@ export default function App() {
 
 | Prop | When it's called / what it does |
 |---|---|
-| `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`) and custom `backIcon`. Full apps use the Hosted App header, so the logo and back icon apply only where the SDK draws the header. |
+| `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`), custom `backIcon`, and `headerHeight` to match your own headers. Full apps use the Hosted App header, so the logo and back icon apply only where the SDK draws the header. |
 | `onSignInRequired(screen?)` | A guest needs to sign in (a members-only screen, or the Hub's **Sign in** tile) — **navigate to your sign-in / sign-up screen**. See [Step 5](#step-5--sign-in--sign-out). |
 | `onSignOutRequested()` | The member tapped **Sign out** in the Savers Hub — **sign them out of your app and call `SaversAppSDK.closeSession()`**. The Savers screen stays open, now signed out. See [Step 5](#step-5--sign-in--sign-out). |
 | `onNavigateBack()` | The Hosted App header's back arrow was tapped with nothing left to go back to — pop your route. |
@@ -332,7 +350,7 @@ await SaversAppSDK.initializeUserSession({
 navigation.goBack(); // back to the Savers screen they came from
 ```
 
-The provider passes the session to the hosted app automatically. Nothing else to wire up.
+The provider passes the session to the hosted app automatically. Nothing else to wire up. The SDK also sends this device's id (from [`registerDevice`](#step-3--initialize-the-sdk)), so call `registerDevice` before `initializeUserSession`.
 
 **Profile verification** (required — Savers App only accepts members your server vouches for): also pass a fresh one-time token from your server — see [Profile Verification](#profile-verification):
 
@@ -452,6 +470,55 @@ When a session ends (its time is up, or it was signed out elsewhere), the SDK si
 | — (`statusCode` 429) | 429 | `verifySignIn`, `verifySignUp` | Too many tries — send a new code |
 
 Apps whose members come from your system have more — see [Members from your system](#members-from-your-system-with-code-sign-in).
+
+---
+
+## Biometric Sign-In
+
+Members who turned it on can sign back in **after signing out** with Face ID / Touch ID (iOS) or fingerprint (Android) instead of a code. Savers App switches it on per app — check `useSaversApp().appInfo.biometricEnabled`.
+
+**Your app owns the key and the prompt.** Create an EC **P-256** key pair in the Secure Enclave (iOS) / Android Keystore that only unlocks after a biometric check, with the library of your choice. The SDK registers the public key with Savers App, and turns a signed challenge into a member session. The private key never leaves the device.
+
+Before you start: call [`registerDevice`](#step-3--initialize-the-sdk) on every app start and sign the member in after it — the key is registered for this device.
+
+| Function | When | Does |
+|---|---|---|
+| `getBiometricStatus()` | Sign-in screen / settings | `{ enabledForApp, registered, biometryType, registeredName }` — offer biometric sign-in when both are `true` |
+| `registerBiometricKey({ publicKey, biometricType })` | Signed in, member turns it on | Registers your public key for this device (replaces an earlier one). `publicKey`: base64 SubjectPublicKeyInfo DER (or the raw 65-byte point); `biometricType`: `'faceId'` \| `'touchId'` (Touch ID / Android fingerprint) |
+| `getBiometricChallenge()` | Member taps "Sign in with Face ID" | `{ challenge, expiresIn }` — a one-time challenge (one try, `expiresIn` seconds) |
+| `signInWithBiometricSignature({ signature })` | After your key signed the challenge | Signs the member in — same result as `verifySignIn` |
+| `removeBiometricKey()` | Member turns it off | Removes it with Savers App (when signed in) and on this device. Delete your key too |
+
+```ts
+// 1. Signed in — the member turns biometric sign-in on.
+const publicKey = await yourKeys.createBiometricKey(); // P-256, base64 SPKI
+await SaversAppSDK.registerBiometricKey({ publicKey, biometricType: 'faceId' });
+
+// 2. Sign-in screen (after sign-out) — offer it.
+const status = await SaversAppSDK.getBiometricStatus();
+if (status.enabledForApp && status.registered) {
+  // show "Sign in as {status.registeredName}" with Face ID / Touch ID
+}
+
+// 3. The member taps it.
+const { challenge } = await SaversAppSDK.getBiometricChallenge();
+const signature = await yourKeys.sign(challenge); // biometric prompt; ECDSA P-256 / SHA-256 over the UTF-8 bytes, base64
+await SaversAppSDK.signInWithBiometricSignature({ signature });
+```
+
+**Errors** (`SDKError.code`):
+
+| `code` | From | Meaning |
+|---|---|---|
+| `BIOMETRIC_DISABLED` | all but `getBiometricStatus` / `removeBiometricKey` | Biometric sign-in is off for your app |
+| `INVALID_INPUT` | `registerBiometricKey`, `signInWithBiometricSignature` | Missing `publicKey` / wrong `biometricType` / empty `signature` |
+| `NO_ACCESS_TOKEN` | `registerBiometricKey` | Nobody signed in |
+| `DEVICE_NOT_REGISTERED` | `registerBiometricKey` | `registerDevice` wasn't called before sign-in — call it, then sign in again |
+| `INVALID_PUBLIC_KEY` | `registerBiometricKey` | Not a P-256 public key in a supported format |
+| `DEVICE_NOT_FOUND` | `registerBiometricKey` | Savers App doesn't know this device — call `registerDevice` |
+| `BIOMETRIC_NOT_REGISTERED` | `getBiometricChallenge`, `signInWithBiometricSignature` | No key on this device, or it was removed — hide the option; the member signs in with a code |
+| `CHALLENGE_EXPIRED` | `signInWithBiometricSignature` | Took too long — get a new challenge |
+| `INVALID_SIGNATURE` | `signInWithBiometricSignature` | The signature doesn't match the registered key |
 
 ---
 
@@ -586,19 +653,21 @@ The Savers screens you show come from the **Hosted App** (a Savers App web page 
 - **Hosted App header** — the Hosted App's own header.
 - **Native header** — a header the SDK draws in your app, with a back arrow.
 
-The SDK supports two ways to show the Hosted App — pick the one that fits your app:
+The SDK supports two ways to show the Hosted App. Your app is registered with Savers App for **one** of them (agreed with Savers App), and only that one works:
 
-- **Full app** — you open **the whole Savers app** from one place (a tab or button) and members move around inside it. Use [`SaversAppScreen`](#full-app-saversappscreen).
+- **Full app** — you open **the whole Savers app** from one place (a tab or button) and members move around inside it. Use [`FullAppScreen`](#full-app-fullappscreen).
 - **Embedded app** — Savers screens sit inside your own native UI, one at a time. See [Embedded app](#embedded-app).
 
-### Full app: `SaversAppScreen`
+Screens of the other way don't open the Hosted App: they show a back arrow and *"This Savers screen isn't available in this app."*, and the SDK logs an error saying which screen to use. So a Full app uses only `FullAppScreen`; an Embedded app uses every screen except `FullAppScreen`.
+
+### Full app: `FullAppScreen`
 
 One route opens the complete Savers app: it starts on Explore (the Savers home), and members reach everything else — offers, cashback, cards, Hub — inside it, with the Hosted App header. When there's nothing left to go back to in Savers, its back (and Android back) returns to your app.
 
 ```tsx
-import { SaversAppScreen } from '@savers_app/react-native-sdk';
+import { FullAppScreen } from '@savers_app/react-native-sdk';
 
-<Stack.Screen name="Savers" component={SaversAppScreen} options={{ headerShown: false }} />
+<Stack.Screen name="Savers" component={FullAppScreen} options={{ headerShown: false }} />
 
 // From your tab / button:
 navigation.navigate('Savers');
@@ -609,7 +678,7 @@ To open it on another page — e.g. from a push notification or deep link — pa
 ```tsx
 navigation.navigate('Savers', { startScreen: 'CASHBACK' });
 
-<SaversAppScreen startScreen={{ name: 'OFR_DETAILS', attributes: [{ key: 'ofrId', value: '12345' }] }} />
+<FullAppScreen startScreen={{ name: 'OFR_DETAILS', attributes: [{ key: 'ofrId', value: '12345' }] }} />
 ```
 
 | Prop | Default |
@@ -623,7 +692,7 @@ Signing out (`SaversAppSDK.closeSession()`) while it's open keeps it open, now s
 
 ### Embedded app
 
-Show each Savers screen from your own UI: the ready-made screens (Option A), or your own route around any Savers screen (Option B).
+Show each Savers screen from your own UI: the ready-made screens (Option A), or your own route around any Savers screen (Option B). The ready-made screens are shortcuts built on `EmbeddedAppScreen` — use `EmbeddedAppScreen` itself for any other Savers screen.
 
 #### Option A: Ready-made screens
 
@@ -674,18 +743,18 @@ To pass props, render it as a child:
 
 > Ready-made screens use React Navigation. expo-router works too, in a development build (not Expo Go). On another navigator, use Option B.
 
-#### Option B: Custom screens (`HostedAppScreen`)
+#### Option B: Custom screens (`EmbeddedAppScreen`)
 
-Use `HostedAppScreen` to show any Savers screen with a **native back arrow** while you control focus and back.
+Use `EmbeddedAppScreen` to show any Savers screen with a **native back arrow** while you control focus and back.
 
 ```tsx
 import { useIsFocused, useNavigation } from '@react-navigation/native';
-import { HostedAppScreen } from '@savers_app/react-native-sdk';
+import { EmbeddedAppScreen } from '@savers_app/react-native-sdk';
 
 function OfferDetailsScreen({ route }) {
   const navigation = useNavigation();
   return (
-    <HostedAppScreen
+    <EmbeddedAppScreen
       screen={{
         name: 'OFR_DETAILS',
         attributes: [{ key: 'ofrId', value: route.params.offerId }],
@@ -729,7 +798,7 @@ iOS swipe-back always pops the route through your navigator. With no `onBack`, t
 
 ### Screen names
 
-Used by `SaversAppScreen`'s `startScreen` and `HostedAppScreen`'s `screen`.
+Used by `FullAppScreen`'s `startScreen` and `EmbeddedAppScreen`'s `screen`.
 
 | Name | Screen | Attributes |
 |---|---|---|
@@ -1127,7 +1196,7 @@ const { sections } = await SaversAppSDK.getFaq();
   "sections": [
     {
       "id": <NUMBER>,
-      "title": <STRING>,
+      "title": <STRING> | null,
       "items": [
         { "id": <NUMBER>, "question": <STRING>, "answerHtml": <STRING> },
         …
@@ -1138,15 +1207,15 @@ const { sections } = await SaversAppSDK.getFaq();
 }
 ```
 
-Show each section's questions as a collapsible list, with `answerHtml` rendered as above.
+Show each section's questions as a collapsible list, with `answerHtml` rendered as above. Sections are optional: a section with `title: null` has no heading — show its questions without one (an FAQ without sections comes as one such section).
 
 ### Keeping members on the current T&C
 
-When the T&C change in a way members must agree to, signed-in members have to accept the new version before they carry on. Privacy Policy updates are only shown, not accepted.
+When the T&C change in a way members must agree to, signed-in members are asked to accept the new version. They can put it off for a grace period (30 days from the version's `effectiveAt`); after that they're deemed to accept it and it's no longer pending. Privacy Policy updates are only shown, not accepted.
 
-1. Call `getPendingTerms()` **after sign-in / sign-up and every time your app comes to the foreground.** Checking only at sign-in isn't enough — members can stay signed in for a long time.
+1. Call `getPendingTerms()` **after sign-in / sign-up and every time your app starts.** Checking only at sign-in isn't enough — members can stay signed in for a long time.
 2. For each item:
-   - `action: 'accept'` (T&C) — show a full-screen page with the content, **Accept** and **Decline**. It can't be dismissed. Accept → `acceptTerms`. Decline → sign the member out with `SaversAppSDK.closeSession()`.
+   - `action: 'accept'` (T&C) — show a full-screen page with the content, **I accept** and **Later**, and tell the member they have until `acceptBy` (after that the terms apply automatically). I accept → `acceptTerms`. Later → close it; it's shown again on the next app start or sign-in.
    - `action: 'notify'` (Privacy Policy) — show the content once with **OK**, then `acceptTerms` (recorded as seen).
 3. Empty list → nothing to show.
 
@@ -1160,7 +1229,7 @@ If the check fails (e.g. offline), let the member carry on and check again next 
 const pending = await SaversAppSDK.getPendingTerms();
 ```
 
-**Response** — `getLegalDocument`'s fields plus `action`, T&C first:
+**Response** — `getLegalDocument`'s fields plus `action` and `acceptBy` (T&C: end of the grace period; `null` for the Privacy Policy), T&C first:
 
 ```json
 [
@@ -1171,7 +1240,8 @@ const pending = await SaversAppSDK.getPendingTerms();
     "title": <STRING>,
     "contentHtml": <STRING>,
     "effectiveAt": <ISO DATE STRING>,
-    "action": "accept" | "notify"
+    "action": "accept" | "notify",
+    "acceptBy": <ISO DATE STRING> | null
   },
   …
 ]
@@ -1213,7 +1283,6 @@ Do this before your first `getPendingTerms()` call for the new member. If it fai
 
 ```tsx
 import { useEffect, useState } from 'react';
-import { AppState } from 'react-native';
 import { SaversAppSDK, useSaversApp, type PendingTerms } from '@savers_app/react-native-sdk';
 
 export function TermsGate() {
@@ -1222,16 +1291,13 @@ export function TermsGate() {
 
   useEffect(() => {
     if (!isSignedIn) return;
+    // On sign-in and each app start (this component mounts once per start).
     let active = true;
-    const check = () =>
-      SaversAppSDK.getPendingTerms()
-        .then(result => active && setPending(result))
-        .catch(() => {}); // offline: check again next time
-    check();
-    const sub = AppState.addEventListener('change', s => s === 'active' && check());
+    SaversAppSDK.getPendingTerms()
+      .then(result => active && setPending(result))
+      .catch(() => {}); // offline: check again next time
     return () => {
       active = false;
-      sub.remove();
       setPending([]);
     };
   }, [isSignedIn]);
@@ -1247,12 +1313,16 @@ export function TermsGate() {
     setPending(items => items.slice(1));
   };
 
+  // Later: just close it for now — asked again on the next app start / sign-in.
+  const later = () => setPending(items => items.slice(1));
+
   return (
     <YourFullScreenModal
       html={current.contentHtml}
       primaryLabel={current.action === 'accept' ? 'I accept' : 'OK'}
       onPrimary={accept}
-      onDecline={current.action === 'accept' ? () => SaversAppSDK.closeSession() : undefined}
+      acceptBy={current.acceptBy} // "Accept by {date} — after that these terms apply automatically."
+      onLater={current.action === 'accept' ? later : undefined}
     />
   );
 }
@@ -1327,7 +1397,7 @@ Deprecated in **1.4.0** — these still work, but will be removed in a future ma
 |---|---|
 | `initialize({ apiKey, encryptionKey, pRefCode, signingKey?, environment: 'SANDBOX' \| 'PROD' })` | `initialize({ apiKey, encryptionKey, appId, environment: 'sandbox' \| 'production' })` |
 | `initialized(...)` | `initialize(...)` |
-| `generateUrl({ screen })` + `HostedAppComponent` | `SaversAppProvider` + ready-made screens / `HostedAppScreen` |
+| `generateUrl({ screen })` + `HostedAppComponent` | `SaversAppProvider` + ready-made screens / `EmbeddedAppScreen` |
 
 Deprecated in **1.5.1**:
 
@@ -1335,6 +1405,13 @@ Deprecated in **1.5.1**:
 |---|---|
 | `requestOtp(...)` | `requestSignIn(...)` — same input and result |
 | `verifyOtp(...)` | `verifySignIn(...)` — same input and result |
+
+Deprecated in **1.5.3** — renamed so the names match the two ways of showing Savers ([Full app / Embedded app](#step-6--show-savers-screens)). Same props and behaviour; only the name changes:
+
+| Deprecated | Use instead |
+|---|---|
+| `SaversAppScreen` (+ `SaversAppScreenProps`, `SaversAppStartScreen`) | `FullAppScreen` (+ `FullAppScreenProps`, `FullAppStartScreen`) |
+| `HostedAppScreen` (+ `HostedAppScreenProps`) | `EmbeddedAppScreen` (+ `EmbeddedAppScreenProps`) |
 
 **Breaking changes in 1.4.0** — check these before upgrading:
 
