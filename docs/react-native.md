@@ -301,6 +301,7 @@ export default function App() {
         theme={theme}
         onSignInRequired={() => navigationRef.navigate('SignIn')}
         onSignOutRequested={signOut} // your logout, then SaversAppSDK.closeSession()
+        onAccountDeleted={signOutToSignIn} // your logout, then your sign-in screen
         onNavigateBack={() => navigationRef.goBack()}
         onEndSession={() => navigationRef.navigate('Home')}
         onConfigError={(e) => console.warn('Savers unavailable', e.code, e.message)}
@@ -319,6 +320,7 @@ export default function App() {
 | `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`), custom `backIcon`, and `headerHeight` to match your own headers. Full apps use the Embedded App header, so the logo and back icon apply only where the SDK draws the header. |
 | `onSignInRequired(screen?)` | A guest needs to sign in (a members-only screen, or the Hub's **Sign in** tile) — **navigate to your sign-in / sign-up screen**. See [Step 5](#step-5--sign-in--sign-out). |
 | `onSignOutRequested()` | The member tapped **Sign out** in the Savers Hub — **sign them out of your app and call `SaversAppSDK.closeSession()`**. The Savers screen stays open, now signed out. See [Step 5](#step-5--sign-in--sign-out). |
+| `onAccountDeleted()` | The member deleted their account in the Savers Profile (Modular apps) — the SDK has already signed out and closed the Savers screen. **Sign them out of your app and open your sign-in screen** (no `closeSession()` needed). See [Delete account](#delete-account). |
 | `onNavigateBack()` | The Embedded App header's back arrow was tapped with nothing left to go back to — pop your route. |
 | `onEndSession()` | The user left the Savers experience (e.g. "Home" in Savers) — go to your home screen. |
 | `onSessionExpired({ guestMode })` | The member's session ended and the SDK has signed them out (`isSignedIn` false, guest mode applies). With `guestMode` false, tell the member and open your sign-in screen. |
@@ -403,6 +405,7 @@ await SaversAppSDK.deleteAccount();
 - Savers marks the account deleted and **signs the member out on every device**; the SDK signs out here (no `onSessionExpired`). If your app has biometric sign-in, delete your own key too.
 - Signing in or signing up again with the same email, phone or user id fails with `ACCOUNT_DELETED` ("Your account deletion is in progress.") until Savers App removes the account for good. After that the member can sign up again as a new member.
 - Errors: `NO_ACCESS_TOKEN` (nobody signed in), `statusCode` 404 (not your app's member).
+- **Modular apps:** members can also delete their account in the Savers Profile. The SDK then signs out, closes the Savers screen and calls `SaversAppProvider`'s `onAccountDeleted` — sign the member out of your app and open your sign-in screen.
 
 ---
 
@@ -852,7 +855,7 @@ Used by `SaversAppScreen`'s `startScreen` and `SaversModuleScreen`'s `screen`. S
 | `OFFERS` | Offers for a category | `category` (required) |
 | `NEAR_ME` | The Near Me offers map (all categories) at the device location from `registerDevice` | — |
 | `SEARCH` | Search offers in all categories (the Explore search bar) | — |
-| `OFR_DETAILS` | One offer's details | `ofrId` (required) |
+| `OFR_DETAILS` | One offer's details | `ofrId`, or `canonicalBrandId` (a brand's offer, e.g. from a banner's `offerId`) — one required |
 | `TRAVEL` | Members-only travel portal | — |
 | `CARD_ENROLL` | Card enrollment | — |
 | `CARD_LIST` | Enrolled cards | — |
@@ -910,9 +913,6 @@ Use these to build native screens (home banners, category rails, hub tiles) with
 | `getHubTiles()` | No | Hub tiles (member-specific when signed in) |
 | `getTotalEarnings()` | Yes | Earnings to date |
 | `getEarnings()` | Yes | Earnings by month (90 days) |
-| `getTransactions()` | Yes | Latest transactions (30 days) |
-| `getRecommendations({ limit?, offset? })` | Yes | Recommended offers |
-| `getFavoriteOffers({ limit?, offset? })` | Yes | The member's favorite offers |
 
 Member functions identify the member from the signed-in session — none take a `userId`. All functions return a Promise and reject with `SDKError` (see [Error Handling](#error-handling)).
 
@@ -1058,117 +1058,6 @@ const visibleTiles = tiles.filter(tile => (isSignedIn ? tile.loginReq !== 2 : tr
 
 ```json
 [ { "year": <YEAR>, "month": <MONTH>, "totalEarned": <STRING> } ]
-```
-
-### getTransactions
-
-**Request** — `await SaversAppSDK.getTransactions()` (signed in). No parameters.
-
-**Response**
-
-```json
-{
-  "totalNumberOfPages": <NUMBER>,
-  "totalNumberOfRecords": <NUMBER>,
-  "items": [
-    {
-      "transactionId": <STRING>,
-      "userId": <STRING>,
-      "purchaseAmount": <STRING>,
-      "rewardAmount": <STRING>,
-      "payoutId": <STRING>,
-      "status": <STRING>,
-      "dateTracked": <DATE_STRING>,
-      "dateConfirmed": <DATE_STRING>,
-      "datePaid": <DATE_STRING>,
-      "dateRejected": <DATE_STRING>
-    }
-  ]
-}
-```
-
-### getRecommendations
-
-**Request**
-
-```ts
-const page = await SaversAppSDK.getRecommendations({ limit: 10, offset: 0 });
-```
-
-| Param | Type | Required | Default |
-|---|---|---|---|
-| `limit` | number | No | `10` |
-| `offset` | number | No | `0` |
-
-**Response**
-
-```json
-{
-  "totalNumberOfPages": <NUMBER>,
-  "totalNumberOfRecords": <NUMBER>,
-  "items": [
-    {
-      "offerId": <STRING>,
-      "canonicalBrandId": <STRING>,
-      "brandDba": <STRING>,
-      "brandLogo": <STRING>,
-      "brandLogoSm": <STRING>,
-      "reward": <STRING>,
-      "title": <STRING>,
-      "redemptionType": <STRING>,
-      "storeDetails": [
-        {
-          "id": <STRING>,
-          "name": <STRING>,
-          "address1": <STRING>,
-          "city": <STRING>,
-          "state": <STRING>,
-          "postCode": <STRING>,
-          "countryCode": <STRING>,
-          "phone": <STRING>,
-          "isOnline": <BOOLEAN>,
-          "geoLocation": { "latitude": <FLOAT>, "longitude": <FLOAT> },
-          "supportedSchemes": <STRING>[]
-        }
-      ]
-    }
-  ]
-}
-```
-
-### getFavoriteOffers
-
-**Request**
-
-```ts
-const page = await SaversAppSDK.getFavoriteOffers({ limit: 10, offset: 0 });
-```
-
-| Param | Type | Required | Default |
-|---|---|---|---|
-| `limit` | number | No | `10` |
-| `offset` | number | No | `0` |
-
-**Response** — only offers that haven't ended.
-
-```json
-{
-  "totalNumberOfPages": <NUMBER>,
-  "totalNumberOfRecords": <NUMBER>,
-  "items": [
-    {
-      "offerId": <STRING>,
-      "canonicalBrandId": <STRING>,
-      "brandDba": <STRING>,
-      "brandLogo": <STRING>,
-      "brandLogoSm": <STRING>,
-      "reward": <STRING>,
-      "title": <STRING>,
-      "redemptionType": <STRING>,
-      "storeDetails": [ … same as getRecommendations … ]
-    }
-  ]
-}
 ```
 
 ---
@@ -1411,7 +1300,7 @@ Network errors during the App ID check are **not** reported through `onConfigErr
 | Code | Cause | Fix |
 |---|---|---|
 | `EMAIL_ALREADY_IN_USE` (409) | `initializeUserSession`: the email belongs to another member | Ask the member to sign in with their existing account, or use another email |
-| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`, `getTransactions`, `getRecommendations`, `getFavoriteOffers`, `getPendingTerms`, `acceptTerms`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
+| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`, `getPendingTerms`, `acceptTerms`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
 | `SESSION_EXPIRED` | The session ended (time up or signed out elsewhere) — the SDK has signed the member out and called `onSessionExpired` | Sign the member in again (`initializeUserSession` with a fresh `profileToken`, or code sign-in) |
 | `ACCOUNT_DELETED` (403) | `requestSignIn`, `requestSignUp`, `initializeUserSession`: the member deleted their account (`deleteAccount`); refused until Savers App removes it for good | Tell the member — the error message says their account deletion is in progress |
 | `INVALID_INPUT` | A required argument is missing or invalid (e.g. `getLegalDocument` with a `docType` other than `'TC'` / `'PP'`, `acceptTerms` with no `documents`) | Fix the call |
@@ -1481,13 +1370,13 @@ Deprecated in **1.6.0** — renamed to the Savers product names. Same props and 
 
 **Breaking changes in 1.4.0** — check these before upgrading:
 
-- **Import from the `SaversAppSDK` bundle only.** 1.3.1 also exported functions by name (e.g. `import { getTransactions, initializeUserSession } from '@savers_app/react-native-sdk'`). These named imports are gone — call them through the bundle instead:
+- **Import from the `SaversAppSDK` bundle only.** 1.3.1 also exported functions by name (e.g. `import { getEarnings, initializeUserSession } from '@savers_app/react-native-sdk'`). These named imports are gone — call them through the bundle instead:
 
   ```diff
-  - import { getTransactions } from '@savers_app/react-native-sdk';
-  - await getTransactions(input);
+  - import { getEarnings } from '@savers_app/react-native-sdk';
+  - await getEarnings(input);
   + import { SaversAppSDK } from '@savers_app/react-native-sdk';
-  + await SaversAppSDK.getTransactions(input);
+  + await SaversAppSDK.getEarnings(input);
   ```
 
   Components (`SaversAppProvider`, the screens), `useSaversApp`, `SDKError` and the types are still exported by name.
@@ -1510,8 +1399,6 @@ Behaviour changes to know when migrating:
 |---|---|
 | `SdkEnvironment.sandbox` / `.prod` | Legacy: `'SANDBOX'` / `'PROD'` · New: `'sandbox'` / `'production'` |
 | `clearUserSession()` | `closeSession()` |
-| `getRecommendations(limit, offset)` | `getRecommendations({ limit, offset })` |
-| `getFavouriteOffers(limit, offset)` | `getFavoriteOffers({ limit, offset })` (new in 1.4.0) |
 | `HostedAppController.closeSession()` | `SaversAppSDK.closeSession()` |
 | `onSaversSdkMessage` prop | Not needed — the SDK handles messages itself |
 | "The SDK never holds a refresh token" | It does: the refresh token is kept **in memory only** (never on disk) and is gone when the app restarts. See [Session & Login](#session--login). |
