@@ -359,14 +359,10 @@ The provider passes the session to the Embedded App automatically. Nothing else 
 
 ```ts
 const profileToken = await yourApi.createSaversProfileToken(); // your server, per sign-in
-await SaversAppSDK.initializeUserSession(profile, {
-  profileToken,
-  termsAccepted: true,   // the member agreed to the current T&C
-  privacyAccepted: true, // the member agreed to the current Privacy Policy
-});
+await SaversAppSDK.initializeUserSession(profile, { profileToken });
 ```
 
-**Consent for new members** — the first time a member signs in to Savers, they must agree to your program's T&C and Privacy Policy. Show both (from [`getLegalDocument`](#getlegaldocument)) with an "I agree" step, and pass `termsAccepted` / `privacyAccepted`. Savers records the version that's live at that moment, so load the text when you show it — don't cache or hard-code it. Without both, a new member isn't registered: `initializeUserSession` fails with `CONSENT_REQUIRED` (show the agree step and call again). Members who already exist sign in as before; later T&C / Privacy Policy updates reach them through [`getPendingTerms`](#getpendingterms). A document your program doesn't have isn't required.
+**Consent** — a member must agree to your program's T&C and Privacy Policy before using Savers. The Savers screens ask them (first time, and when a new version comes out), so your app doesn't need an "I agree" step at sign-in. `termsAccepted` / `privacyAccepted` on `initializeUserSession` are deprecated: they still work, but don't add them.
 
 - Call it again on every app start / login — it reuses the stored session when still valid and refreshes the profile.
 - Expired tokens are refreshed silently in the background.
@@ -609,7 +605,6 @@ Savers checks that `userId` matches and that the **email** (case-insensitive) or
 |---|---|---|
 | `INVALID_USER_SESSION` | 401 | No `profileToken`, or your API answered 401 |
 | `PROFILE_MISMATCH` | 422 | Your API returned a different member / email / phone than `profile` |
-| `CONSENT_REQUIRED` | 422 | A new member without `termsAccepted` / `privacyAccepted` — show the T&C and Privacy Policy, then call again with both `true` |
 | `PARTNER_VERIFICATION_UNAVAILABLE` | 503 | Your API didn't answer (timeout / error) — the sign-in is refused; try again |
 | `APP_ID_REQUIRED` | 400 | An old SDK version without the App ID — update the SDK |
 | `SIGNIN_DISABLED` | 403 | Your app isn't set up for `initializeUserSession` (`integrationMode` not 1) — contact Savers App |
@@ -1070,8 +1065,6 @@ Your program's Terms & Conditions, Privacy Policy and FAQ come from Savers, so y
 |---|---|---|
 | `getLegalDocument(docType, lang?)` | No | The current T&C (`'TC'`) or Privacy Policy (`'PP'`) |
 | `getFaq(lang?)` | No | FAQ sections and questions |
-| `getPendingTerms(lang?)` | Yes | T&C the member must accept / Privacy Policy updates to show |
-| `acceptTerms({ documents, lang? })` | Yes | Records the member's acceptance (nothing returned) |
 
 `lang` defaults to `'en'`. When your program has no content in the language asked for, English comes back — the result's `lang` says which.
 
@@ -1146,113 +1139,15 @@ Show each section's questions as a collapsible list, with `answerHtml` rendered 
 
 ### Keeping members on the current T&C
 
-When the T&C change in a way members must agree to, signed-in members are asked to accept the new version. They can put it off for a grace period (30 days from the version's `effectiveAt`); after that they're deemed to accept it and it's no longer pending. Privacy Policy updates are only shown, not accepted.
-
-1. Call `getPendingTerms()` **after sign-in / sign-up and every time your app starts.** Checking only at sign-in isn't enough — members can stay signed in for a long time.
-2. For each item:
-   - `action: 'accept'` (T&C) — show a full-screen page with the content, **I accept** and **Later**, and tell the member they have until `acceptBy` (after that the terms apply automatically). I accept → `acceptTerms`. Later → close it; it's shown again on the next app start or sign-in.
-   - `action: 'notify'` (Privacy Policy) — show the content once with **OK**, then `acceptTerms` (recorded as seen).
-3. Empty list → nothing to show.
-
-If the check fails (e.g. offline), let the member carry on and check again next time the app opens.
-
-### getPendingTerms
-
-**Request**
-
-```ts
-const pending = await SaversAppSDK.getPendingTerms();
-```
-
-**Response** — `getLegalDocument`'s fields plus `action` and `acceptBy` (T&C: end of the grace period; `null` for the Privacy Policy), T&C first:
-
-```json
-[
-  {
-    "docType": "TC",
-    "version": <NUMBER>,
-    "lang": <STRING>,
-    "title": <STRING>,
-    "contentHtml": <STRING>,
-    "effectiveAt": <ISO DATE STRING>,
-    "action": "accept" | "notify",
-    "acceptBy": <ISO DATE STRING> | null
-  },
-  …
-]
-```
-
-### acceptTerms
-
-**Request** — the versions the member was shown:
-
-```ts
-await SaversAppSDK.acceptTerms({
-  documents: [{ docType: item.docType, version: item.version }],
-  lang: item.lang,
-});
-```
-
-Sending a version again is harmless. A version that isn't current for your program is rejected (`statusCode` 400).
+New T&C and Privacy Policy versions are shown by the Savers screens: a signed-in member is asked to accept them (or, for a first-time member, to accept both) before using a Savers screen. Your app doesn't need to do anything.
 
 ### At first sign-in (`initializeUserSession`)
 
-A member's first `initializeUserSession` needs their agreement to the current T&C and Privacy Policy: pass `termsAccepted` / `privacyAccepted` (see [Step 5](#step-5--sign-in--sign-out)). Savers records both versions then — no `acceptTerms` call needed.
+Nothing to pass: the Savers screens ask a first-time member to accept the T&C and Privacy Policy before they're used. (`termsAccepted` / `privacyAccepted` on `initializeUserSession` are deprecated — they still work, but don't add them.)
 
 ### At sign-up
 
-Sign-up needs the member's agreement too: pass `termsAccepted` / `privacyAccepted` to `requestSignUp` (see [Sign up](#sign-up-integrationmode-3)). Savers records both versions then — no `acceptTerms` call needed.
-
-### Example: T&C gate
-
-```tsx
-import { useEffect, useState } from 'react';
-import { SaversAppSDK, useSaversApp, type PendingTerms } from '@savers_app/react-native-sdk';
-
-export function TermsGate() {
-  const { isSignedIn } = useSaversApp();
-  const [pending, setPending] = useState<PendingTerms[]>([]);
-
-  useEffect(() => {
-    if (!isSignedIn) return;
-    // On sign-in and each app start (this component mounts once per start).
-    let active = true;
-    SaversAppSDK.getPendingTerms()
-      .then(result => active && setPending(result))
-      .catch(() => {}); // offline: check again next time
-    return () => {
-      active = false;
-      setPending([]);
-    };
-  }, [isSignedIn]);
-
-  const current = isSignedIn ? pending[0] : undefined;
-  if (!current) return null;
-
-  const accept = async () => {
-    await SaversAppSDK.acceptTerms({
-      documents: [{ docType: current.docType, version: current.version }],
-      lang: current.lang,
-    });
-    setPending(items => items.slice(1));
-  };
-
-  // Later: just close it for now — asked again on the next app start / sign-in.
-  const later = () => setPending(items => items.slice(1));
-
-  return (
-    <YourFullScreenModal
-      html={current.contentHtml}
-      primaryLabel={current.action === 'accept' ? 'I accept' : 'OK'}
-      onPrimary={accept}
-      acceptBy={current.acceptBy} // "Accept by {date} — after that these terms apply automatically."
-      onLater={current.action === 'accept' ? later : undefined}
-    />
-  );
-}
-```
-
-Render it once inside `SaversAppProvider`, e.g. next to your navigator.
+Sign-up needs the member's agreement too: pass `termsAccepted` / `privacyAccepted` to `requestSignUp` (see [Sign up](#sign-up-integrationmode-3)). Savers records both versions then.
 
 ---
 
@@ -1300,10 +1195,10 @@ Network errors during the App ID check are **not** reported through `onConfigErr
 | Code | Cause | Fix |
 |---|---|---|
 | `EMAIL_ALREADY_IN_USE` (409) | `initializeUserSession`: the email belongs to another member | Ask the member to sign in with their existing account, or use another email |
-| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`, `getPendingTerms`, `acceptTerms`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
+| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
 | `SESSION_EXPIRED` | The session ended (time up or signed out elsewhere) — the SDK has signed the member out and called `onSessionExpired` | Sign the member in again (`initializeUserSession` with a fresh `profileToken`, or code sign-in) |
 | `ACCOUNT_DELETED` (403) | `requestSignIn`, `requestSignUp`, `initializeUserSession`: the member deleted their account (`deleteAccount`); refused until Savers App removes it for good | Tell the member — the error message says their account deletion is in progress |
-| `INVALID_INPUT` | A required argument is missing or invalid (e.g. `getLegalDocument` with a `docType` other than `'TC'` / `'PP'`, `acceptTerms` with no `documents`) | Fix the call |
+| `INVALID_INPUT` | A required argument is missing or invalid (e.g. `getLegalDocument` with a `docType` other than `'TC'` / `'PP'`) | Fix the call |
 | `NETWORK_ERROR` | No connection / request failed, or the App ID check is still unanswered after 15 s (e.g. offline at launch) | Retry, or show an offline message |
 
 **Render error:**
