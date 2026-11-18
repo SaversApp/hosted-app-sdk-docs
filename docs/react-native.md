@@ -2,7 +2,7 @@
 
 React Native SDK that embeds the Savers App experience inside your Host App. It keeps the Savers Embedded App (a web app) loaded once in the background, shows it on your own routes (ready-made or custom screens), signs your members in, and gives you data functions (banners, categories, hub tiles, earnings, …) to build your own native screens.
 
-Package name: `@savers_app/react-native-sdk` · Version: **1.6.0**
+Package name: `@savers_app/react-native-sdk` · Version: **1.6.4**
 
 > **Upgrading from 1.3.x?** `generateUrl` and `HostedAppComponent` have been removed (1.6.0); the old `initialize({ pRefCode, … })` options are deprecated. See [Deprecation Notes & Migration](#deprecation-notes--migration).
 
@@ -181,6 +181,8 @@ async function setUpSavers() {
 
 Neither call needs `await`: both return immediately.
 
+> ⚠️ **Don't render `SaversAppProvider` before `initialize` has been called** — it throws `NOT_INITIALIZED` and your app crashes. With the keys coming from your backend (as above), keep your splash screen up until `setUpSavers()` has called `initialize`, then render the provider. You don't need to wait for the App ID check itself: the provider handles that.
+
 **`registerDevice`** registers the device with Savers App in the background (after the App ID check) and gives the Embedded App its id and location. Call it **before the member signs in**: every sign-in (`initializeUserSession`, code sign-in, sign-up, biometric) links this device to the member, and [biometric sign-in](#biometric-sign-in) needs it.
 
 | Field | Required | Meaning |
@@ -302,6 +304,7 @@ export default function App() {
         onSignInRequired={() => navigationRef.navigate('SignIn')}
         onSignOutRequested={signOut} // your logout, then SaversAppSDK.closeSession()
         onAccountDeleted={signOutToSignIn} // your logout, then your sign-in screen
+        onNotificationPress={openPushTap} // open it as you open a tapped push
         onNavigateBack={() => navigationRef.goBack()}
         onEndSession={() => navigationRef.navigate('Home')}
         onConfigError={(e) => console.warn('Savers unavailable', e.code, e.message)}
@@ -320,9 +323,10 @@ export default function App() {
 | `theme` | Your brand colours for the SDK's native UI (back arrows, messages, Sign in button), plus an optional header `logo` — PNG/JPG, remote SVG, or an SVG component (max 160×80; optional `logoSize`, `logoPosition` `'right'` or `'center'`), custom `backIcon`, and `headerHeight` to match your own headers. Full apps use the Embedded App header, so the logo and back icon apply only where the SDK draws the header. |
 | `onSignInRequired(screen?)` | A guest needs to sign in (a members-only screen, or the Hub's **Sign in** tile) — **navigate to your sign-in / sign-up screen**. See [Step 5](#step-5--sign-in--sign-out). |
 | `onSignOutRequested()` | The member tapped **Sign out** in the Savers Hub — **sign them out of your app and call `SaversAppSDK.closeSession()`**. The Savers screen stays open, now signed out. See [Step 5](#step-5--sign-in--sign-out). |
-| `onAccountDeleted()` | The member deleted their account in the Savers Profile (Modular apps) — the SDK has already signed out and closed the Savers screen. **Sign them out of your app and open your sign-in screen** (no `closeSession()` needed). See [Delete account](#delete-account). |
-| `onNavigateBack()` | The Embedded App header's back arrow was tapped with nothing left to go back to — pop your route. |
-| `onEndSession()` | The user left the Savers experience (e.g. "Home" in Savers) — go to your home screen. |
+| `onAccountDeleted()` | The member deleted their account in the Savers Profile (Modular apps) — the SDK has already signed out; the Savers screen stays open, now signed out. **Sign them out of your app and reset your navigation to your sign-in screen**, so back doesn't return to the Savers screen (no `closeSession()` needed). See [Delete account](#delete-account). |
+| `onNotificationPress(notification)` | The member tapped a notification in the Savers Inbox — **open it the way you open a tapped push**. `notification` (type `NotificationPress`) has the shape of a push: `notification.title` / `body`, and `data.screen` = the same routing value a push carries (e.g. `OffersListView?Catg=FnD`, `LGS`, `MGS`, `unsub`, `ofrdetails?ofrId=123`), plus `searchCategory`, `searchQry` and the notification's other params. Not passed: the tap does nothing (a developer warning is logged). |
+| `onNavigateBack()` | The Embedded App header's back arrow was tapped with nothing left to go back to — pop your route. Only for a `SaversModuleScreen` you render **without** `onBack`; the ready-made screens and `SaversAppScreen` handle back themselves (their own `onBack`, else `navigation.goBack()`). |
+| `onEndSession()` | The member left Savers from the Hub's **Home** tile (`SaversAppScreen`) — go to your home screen. |
 | `onSessionExpired({ guestMode })` | The member's session ended and the SDK has signed them out (`isSignedIn` false, guest mode applies). With `guestMode` false, tell the member and open your sign-in screen. |
 | `onConfigError(error)` | The App ID check failed. Savers screens show an "unavailable" message instead. |
 
@@ -337,30 +341,31 @@ Your app owns sign-in — with your own login (below), or with a one-time code f
 On that screen, after your own login succeeds, start the Savers session:
 
 ```ts
-await SaversAppSDK.initializeUserSession({
-  userId: 'USER_ID',          // required
-  email: 'EMAIL_ADDRESS',     // required
-  firstname: 'FIRST_NAME',
-  lastname: 'LAST_NAME',
-  phone: 'PHONE_NUMBER',      // required when your auth mode is PHONE
-  city: 'CITY',               // optional
-  zipcode: 'ZIP_CODE',        // optional
-  dob: 'YYYY-MM-DD',          // optional
-  pv: '1',                    // optional, '0' | '1'
-  ev: '1',                    // optional, '0' | '1'
-  referrer_user_id: 'ID',     // optional
-});
+// A fresh one-time token from your server, for every sign-in (see Profile Verification)
+const profileToken = await yourApi.createSaversProfileToken();
+
+await SaversAppSDK.initializeUserSession(
+  {
+    userId: 'USER_ID',          // required
+    email: 'EMAIL_ADDRESS',     // required
+    firstname: 'FIRST_NAME',
+    lastname: 'LAST_NAME',
+    phone: 'PHONE_NUMBER',      // required when Savers App sets your app to phone sign-in
+    city: 'CITY',               // optional
+    zipcode: 'ZIP_CODE',        // optional
+    dob: 'YYYY-MM-DD',          // optional
+    pv: '1',                    // optional, '0' | '1'
+    ev: '1',                    // optional, '0' | '1'
+    referrer_user_id: 'ID',     // optional
+  },
+  { profileToken }              // required
+);
 navigation.goBack(); // back to the Savers screen they came from
 ```
 
 The provider passes the session to the Embedded App automatically. Nothing else to wire up. The SDK also sends this device's id (from [`registerDevice`](#step-3--initialize-the-sdk)), so call `registerDevice` before `initializeUserSession`.
 
-**Profile verification** (required — Savers App only accepts members your server vouches for): also pass a fresh one-time token from your server — see [Profile Verification](#profile-verification):
-
-```ts
-const profileToken = await yourApi.createSaversProfileToken(); // your server, per sign-in
-await SaversAppSDK.initializeUserSession(profile, { profileToken });
-```
+**Profile verification** (required): Savers App only accepts members your server vouches for, so `profileToken` must be a fresh one-time token from your server for every sign-in. While the member's session is still valid (e.g. app start), Savers doesn't check it. See [Profile Verification](#profile-verification).
 
 **Consent** — a member must agree to your program's T&C and Privacy Policy before using Savers. The Savers screens ask them (first time, and when a new version comes out), so your app doesn't need an "I agree" step at sign-in. `termsAccepted` / `privacyAccepted` on `initializeUserSession` are deprecated: they still work, but don't add them.
 
@@ -395,13 +400,15 @@ Let a signed-in member delete their Savers account (e.g. from your Settings), af
 
 ```ts
 await SaversAppSDK.deleteAccount();
-// Signed out already — isSignedIn is false. Open your sign-in screen.
+// The Savers session has ended (isSignedIn is false) — no closeSession() needed.
+await myAuth.logout(); // sign the member out of your app too
+// then open your sign-in screen
 ```
 
 - Savers marks the account deleted and **signs the member out on every device**; the SDK signs out here (no `onSessionExpired`). If your app has biometric sign-in, delete your own key too.
 - Signing in or signing up again with the same email, phone or user id fails with `ACCOUNT_DELETED` ("Your account deletion is in progress.") until Savers App removes the account for good. After that the member can sign up again as a new member.
 - Errors: `NO_ACCESS_TOKEN` (nobody signed in), `statusCode` 404 (not your app's member).
-- **Modular apps:** members can also delete their account in the Savers Profile. The SDK then signs out, closes the Savers screen and calls `SaversAppProvider`'s `onAccountDeleted` — sign the member out of your app and open your sign-in screen.
+- **Modular apps:** members can also delete their account in the Savers Profile. The SDK then signs out and calls `SaversAppProvider`'s `onAccountDeleted`. The Savers screen stays open, now signed out — sign the member out of your app and reset your navigation to your sign-in screen, so back doesn't return to it.
 
 ---
 
@@ -477,13 +484,6 @@ Call `restoreSession()` from your splash screen — it resumes the code sign-in 
 const { restored, profile } = await SaversAppSDK.restoreSession();
 // restored: false → nobody signed in, or the session ended (sign in again)
 ```
-
-### App updates
-
-Savers App keeps your app's store releases. Check `useSaversApp().appInfo.appVersion` on your splash screen:
-
-- `updateRequired: true` → the installed version is below the latest release. Show a blocking "Update" screen that opens your store page.
-- A release can be marked to **sign members out on update**: `restoreSession()` then returns `restored: false` once (also when the member skipped releases in between), so they sign in again. Nothing to do in your app.
 
 ### When the session ends
 
@@ -656,7 +656,7 @@ What happens behind `initializeUserSession` and `closeSession` (Step 5). Nothing
 | Session ID | iOS Keychain / Android Keystore (`react-native-keychain`) | Until sign-out or revoked. Without `react-native-keychain` it isn't kept across app restarts. |
 | Access token | Memory only — never written to disk | Short-lived (set by the backend); refreshed automatically |
 | Refresh token | Memory only | Gone when the app restarts |
-| Member profile (from `initializeUserSession`) | Memory only | Used to re-authorize silently; gone when the app restarts |
+| Member profile (from `initializeUserSession`) | Memory only | Gone when the app restarts |
 
 ### How a session works
 
@@ -664,7 +664,7 @@ What happens behind `initializeUserSession` and `closeSession` (Step 5). Nothing
    - Stored session ID still valid → the **same** session is reused and its profile updated.
    - No session ID, or it's no longer valid → a **new** session is created and its session ID stored.
 2. **Embedded App** — `SaversAppProvider` passes the session to the Embedded App (on every page load too), which signs itself in.
-3. **Expired token** — when a data call gets `401`, the SDK refreshes the access token; if that fails, it re-authorizes with the profile it holds in memory, then retries the call **once** (no loops). No prompt for the member.
+3. **Expired token** — when a data call gets `401`, the SDK refreshes the access token and retries the call **once** (no loops). No prompt for the member. If the refresh fails because the session has ended, the SDK signs the member out and calls `onSessionExpired` ([When the session ends](#when-the-session-ends)).
 4. **App restart** — memory is cleared, so call `initializeUserSession` again on startup / login (Step 5). With the stored session ID it usually continues the same session.
 5. **Sign out** — `closeSession()` ends the session on the backend, clears the tokens, profile and session ID, and tells the Embedded App, which ends its own sessions.
 
@@ -676,6 +676,7 @@ What happens behind `initializeUserSession` and `closeSession` (Step 5). Nothing
 - Data functions authenticate with the member's access token (`Bearer`), not a `userId` you pass, so one member can't request another member's data.
 - Request signing proves a request wasn't altered on the way; it doesn't prove it came from an unmodified copy of your app (app attestation — Play Integrity / App Attest — isn't implemented).
 - Memory-only tokens are safe from disk extraction, but not from a fully compromised device reading app memory.
+- The sign-in calls also return `accessToken` / `refreshToken` to your app. **Don't store or log them** — the SDK manages the session for you.
 
 ---
 
@@ -695,7 +696,7 @@ Screens of the other way don't open the Embedded App: they show a back arrow and
 
 ### Single-Entry Component: `SaversAppScreen`
 
-One route opens the complete Savers app: it starts on Explore (the Savers home), and members reach everything else — offers, cashback, cards, Hub — inside it, with the Embedded App header. When there's nothing left to go back to in Savers, its back (and Android back) returns to your app.
+One route opens the complete Savers app: it starts on Explore (the Savers home), and members reach everything else — offers, cashback, cards, Hub — inside it, with the Embedded App header. Back moves back inside Savers and stops at Explore. To return to your app, the member taps the **logo on Explore** (back to the screen that opened Savers) or the **Home tile on the Hub** (calls the provider's `onEndSession` — go to your home screen).
 
 ```tsx
 import { SaversAppScreen } from '@savers_app/react-native-sdk';
@@ -762,7 +763,7 @@ Props (all optional):
 | `onBack` | `navigation.goBack()` (does nothing if nothing is behind) |
 | `backIconColor` | `theme.primary` |
 | `nativeHeader` | As in [Headers](#headers). `true` = native back-arrow header, `false` = the Embedded App header. |
-| `showBack` | `true`. `false` = no back arrow, and Android back does nothing once the Savers page has nothing to go back to. Use it for a step the member must finish, such as card enrollment when your app requires a card. |
+| `showBack` | `true`. `false` = no back arrow, and Android back does nothing once the Savers page has nothing to go back to. Use it for a step the member must finish, such as card enrollment when your app requires a card. On iOS, also set `gestureEnabled: false` in the screen options (or open it with nothing behind it), so swipe-back can't leave the step. |
 | `footer` | None. Your own content under the Savers screen, such as links. The Savers page ends above it, and the SDK adds the bottom safe area under it. |
 | `header` | None. Your own header in place of the SDK's (back arrow + logo), such as a centred full logo. It must cover the status bar itself; the Savers page starts below it. |
 | `showTitle` (`CardEnrollScreen`) | `true`. `false` hides the Savers screen's own title text, so you can show your own, e.g. in `header`. |
@@ -770,6 +771,7 @@ Props (all optional):
 | `category` (`OffersScreen` only) | The route's `category` param, e.g. `navigation.navigate('Offers', { category: 'food' })`. With no `category`, `nearMe` or `search`, it opens offer **search** (`SEARCH`). |
 | `nearMe` (`OffersScreen` only) | The route's `nearMe` param — opens the **Near Me** offers map (`NEAR_ME`) at the device location from `registerDevice`, e.g. `navigation.navigate('Offers', { nearMe: true })` (all categories; `category` is ignored). |
 | `search` (`OffersScreen` only) | The route's `search` param — opens offer **search** in all categories (`SEARCH`), as the Explore search bar, e.g. `navigation.navigate('Offers', { search: true })` (`category` is ignored). |
+| `tab` (`InboxScreen`, `CashbackScreen`) | The route's `tab` param, else the first tab. `InboxScreen`: `'recommendations'` or `'notifications'`; `CashbackScreen`: `'transactions'` or `'payouts'` — e.g. `navigation.navigate('Inbox', { tab: 'notifications' })` for a tapped push with screen `Notif` (`REC`, `TRX`, `PAYOUT` likewise). Requires the matching hosted app release. |
 
 To pass props, render it as a child:
 
@@ -779,7 +781,19 @@ To pass props, render it as a child:
 </Stack.Screen>
 ```
 
-> Ready-made screens use React Navigation. expo-router works too, in a development build (not Expo Go). On another navigator, use Option B.
+> **Which import?** It depends on your navigator:
+>
+> | Your app uses | Import the ready-made screens (and `SaversAppScreen`) from |
+> |---|---|
+> | React Navigation (plain React Native, or Expo without Expo Router) | `@savers_app/react-native-sdk` (as above) |
+> | Expo Router | `@savers_app/react-native-sdk/expo-router` — same names and props; route params (`category`, `tab`, …) come from the Expo Router route. Needs a development build (not Expo Go). |
+> | Another navigator | Neither — use `SaversModuleScreen` ([Option B](#option-b-custom-screens-saversmodulescreen)) |
+>
+> ```tsx
+> // Expo Router: app/cashback.tsx
+> import { CashbackScreen } from '@savers_app/react-native-sdk/expo-router';
+> export default CashbackScreen;
+> ```
 
 #### Option B: Custom screens (`SaversModuleScreen`)
 
@@ -902,7 +916,7 @@ Use these to build native screens (home banners, category rails, hub tiles) with
 
 | Function | Signed in? | Returns |
 |---|---|---|
-| `getBanners(memberType?)` | No | Carousel banners |
+| `getBanners()` | No | Carousel banners |
 | `getStrings(scope, lang?)` | No | CMS copy (text) for your own screens |
 | `getCategories()` | No | Offer categories |
 | `getHubTiles()` | No | Hub tiles (member-specific when signed in) |
@@ -916,14 +930,10 @@ Member functions identify the member from the signed-in session — none take a 
 **Request**
 
 ```ts
-const banners = await SaversAppSDK.getBanners();   // or getBanners(1) for a free member
+const banners = await SaversAppSDK.getBanners();
 ```
 
-Returns your program's **carousel** banners.
-
-| Param | Type | Required | Notes |
-|---|---|---|---|
-| `memberType` | number | No | `1` = free member, `2` / `3` = paid. Omit it to skip member-specific banners. |
+Returns your program's **carousel** banners. No parameters.
 
 **Response**
 
@@ -1084,6 +1094,14 @@ const { width } = useWindowDimensions();
 />;
 ```
 
+### Links between the T&C and Privacy Policy
+
+The T&C can link to the Privacy Policy and the other way round. Savers App sets where those links point **for your app** (for example `yourapp://terms` and `yourapp://privacy`) — tell your Savers contact the two links your app handles. Open them in your app (your deep-link handling, or the HTML renderer's link press) to show the other document.
+
+- Not set up for your app: the words show as plain text, with no link.
+- Other links in the content (such as `mailto:`) are unchanged.
+- The SDK sends your App ID with `getLegalDocument` so Savers knows which links to use. With the deprecated `initialize` options (no `appId`), the words come back as plain text.
+
 ### getLegalDocument
 
 **Request**
@@ -1187,25 +1205,34 @@ Everything else is a rejected promise from the call you made.
 | `INVALID_APP_ID` (404) | App ID not registered for this partner + bundle ID / package | Check credentials and registered bundle ID ([Step 0](#step-0--getting-access--partner-registration--credentials)) |
 | `MISSING_DEVICE_INFO` | `react-native-device-info` not installed (needed for the App ID check) | Install it ([Step 1](#step-1--install)) |
 | `statusCode` 401 / 403 | API key or Encryption Key rotated, revoked or wrong | Fetch fresh keys from your backend; if still failing, contact Savers App support |
+| Any other code | Savers App's setup for your app is incomplete on its side | Contact Savers App support with the code |
 
 Network errors during the App ID check are **not** reported through `onConfigError`. The SDK keeps retrying in the background. SDK calls wait for it up to **15 seconds**, then reject with `NETWORK_ERROR`. Once the device is back online, the check finishes and later calls work as normal.
+
+**Savers App paused or busy (503).** Savers App can pause its service for every app or just yours. A 503 during the App ID check isn't reported through `onConfigError` either: the SDK keeps retrying in the background (2 s, 4 s, … up to 60 s). Meanwhile:
+
+- `useSaversApp().appUnavailableMessage` has the message to show the member (e.g. on your sign-in screen) — Savers App's own text when the service is paused (`SERVICE_PAUSED`), otherwise "Service is not available right now. Please try again later." It's `null` when there's nothing to show.
+- `SaversAppSDK` calls reject at once with that 503 error instead of waiting 15 seconds.
+
+Once Savers App is back, the check finishes, `appUnavailableMessage` turns `null` and calls work as normal.
 
 **Call errors** — rejected promise from that call:
 
 | Code | Cause | Fix |
 |---|---|---|
 | `EMAIL_ALREADY_IN_USE` (409) | `initializeUserSession`: the email belongs to another member | Ask the member to sign in with their existing account, or use another email |
-| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`) called with nobody signed in | Check `isSignedIn` first, or call `requestSignIn()` |
+| `NO_ACCESS_TOKEN` | A member-only function (`getTotalEarnings`, `getEarnings`) called with nobody signed in | Check `isSignedIn` first. If nobody is signed in, sign the member in the way your app does: `initializeUserSession` (your members), code sign-in (`requestSignIn` → `verifySignIn`), sign-up (`requestSignUp` → `verifySignUp`), biometric sign-in (`signInWithBiometricSignature`), or `restoreSession` at app start |
 | `SESSION_EXPIRED` | The session ended (time up or signed out elsewhere) — the SDK has signed the member out and called `onSessionExpired` | Sign the member in again (`initializeUserSession` with a fresh `profileToken`, or code sign-in) |
 | `ACCOUNT_DELETED` (403) | `requestSignIn`, `requestSignUp`, `initializeUserSession`: the member deleted their account (`deleteAccount`); refused until Savers App removes it for good | Tell the member — the error message says their account deletion is in progress |
 | `INVALID_INPUT` | A required argument is missing or invalid (e.g. `getLegalDocument` with a `docType` other than `'TC'` / `'PP'`) | Fix the call |
 | `NETWORK_ERROR` | No connection / request failed, or the App ID check is still unanswered after 15 s (e.g. offline at launch) | Retry, or show an offline message |
+| `SERVICE_PAUSED` (503) — or another code with `statusCode` 503 | Savers App's service is paused (for every app or just yours) or busy | Show `useSaversApp().appUnavailableMessage` (or `error.message`); the SDK retries and calls work again once it's back |
 
-**Render error:**
+**Before `initialize`:**
 
 | Code | Cause | Fix |
 |---|---|---|
-| `NOT_INITIALIZED` | `SaversAppProvider` rendered before `initialize` | Call `initialize` first |
+| `NOT_INITIALIZED` | `SaversAppProvider` rendered, or a `SaversAppSDK` call made, before `initialize` | Call `initialize` first ([Step 3](#step-3--initialize-the-sdk)) |
 
 ---
 
@@ -1231,6 +1258,18 @@ Deprecated in **1.6.0** — renamed to the Savers product names. Same props and 
 |---|---|
 | `FullAppScreen` (+ `FullAppScreenProps`, `FullAppStartScreen`) | `SaversAppScreen` (+ `SaversAppScreenProps`, `SaversAppStartScreen`) |
 | `EmbeddedAppScreen` (+ `EmbeddedAppScreenProps`) | `SaversModuleScreen` (+ `SaversModuleScreenProps`) |
+
+Deprecated in **1.6.2** — the Savers screens now ask members to accept the T&C and Privacy Policy. They still work (recorded when sent; a developer warning is logged once) and will be removed in a later version.
+
+| Deprecated | Use instead |
+|---|---|
+| `initializeUserSession` options `termsAccepted` / `privacyAccepted` | Leave them out — `initializeUserSession(profile, { profileToken })`. `requestSignUp` is unchanged: both are still required there. |
+
+**Removed in 1.6.1:**
+
+| Removed | Use instead |
+|---|---|
+| `SaversAppSDK.getTransactions()` | `getEarnings()` / `getTotalEarnings()`, or the Savers cashback screen (`CashbackScreen`) |
 
 **Removed in 1.6.0** — deprecated earlier, now gone:
 
@@ -1261,6 +1300,8 @@ Deprecated in **1.6.0** — renamed to the Savers product names. Same props and 
   ```
 
   `initializeUserSession` needs them only for a member's first sign-in (existing members sign in as before); `requestSignUp` always. Remove any `acceptTerms` call you make right after `verifySignUp` — Savers records both documents at sign-up now. **Savers App's servers enforce this, so it applies to older SDK versions too** once the matching backend release is live: update your app before then. See [Step 5](#step-5--sign-in--sign-out) and [Sign up](#sign-up-integrationmode-3).
+
+  **Changed in 1.6.2:** `initializeUserSession` no longer needs `termsAccepted` / `privacyAccepted` — leave them out; the Savers screens ask the member instead. `requestSignUp` still needs both. See [Deprecation Notes & Migration](#deprecation-notes--migration).
 - **Removed APIs:** `generateUrl`, `HostedAppComponent` and `HostedAppScreen` — see the table above.
 
 **Breaking changes in 1.4.0** — check these before upgrading:
